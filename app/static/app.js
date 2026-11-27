@@ -72,6 +72,7 @@ async function kiosk() {
 }
 async function staff() {
   title('Рабочее место врача','Приоритет наступившей записи, FIFO для остальных; долго ожидающие получают преимущество. Правила только для демо.');
+  const identity = await api('/api/me');
   const rooms = await api('/api/rooms'), select = roomSelect(rooms), panel = node('section',undefined,'panel'), bar = node('div',undefined,'row'), msg = notice(), rows = node('div'), absent = node('div'), sync = node('p','Подключение…','muted');
   let busy = false, seq = 0, connected = false;
   const call = button('Вызвать следующего',() => mutate(`/api/staff/${select.value}/call-next`,{})); call.disabled = true;
@@ -127,14 +128,14 @@ async function staff() {
   const booking = node('details',undefined,'panel'); booking.append(node('summary','Создать синтетическую запись на время'));
   const bookingForm = node('form',undefined,'row'), code = node('input'), date = node('input'), dest = roomSelect(rooms), submit = node('button','Создать запись'), result = notice();
   code.placeholder = 'DEMO-TEST'; code.required = true; code.maxLength = 32; code.setAttribute('aria-label','Тестовый код записи'); date.type = 'datetime-local'; date.required = true; date.setAttribute('aria-label','Время приёма'); submit.type = 'submit';
-  bookingForm.append(code,dest,date,submit); booking.append(bookingForm,result); app.append(booking);
+  bookingForm.append(code,dest,date,submit); booking.append(bookingForm,result); if (['demo','admin','registrar'].includes(identity.role)) app.append(booking);
   bookingForm.addEventListener('submit',async e => { e.preventDefault(); submit.disabled = true; try { await api('/api/staff/demo-appointments',{booking_code:code.value,room_id:dest.value,scheduled_at:new Date(date.value).toISOString()}); message(result,'Запись создана. Подтвердите её в терминале.'); } catch(e) { message(result,e.message,true); } finally { submit.disabled = false; } });
   const config = node('details',undefined,'panel');
   config.append(node('summary','Управление кабинетами (демо)'));
   const configForm = node('form',undefined,'row'), roomCode = node('input'), roomLabel = node('input'), saveRoom = node('button','Сохранить кабинет'), configMsg = notice();
   roomCode.placeholder = 'LAB-1'; roomCode.required = true; roomCode.maxLength = 16; roomCode.pattern = '[A-Za-z0-9_\\-]+'; roomCode.setAttribute('aria-label','Код кабинета');
   roomLabel.placeholder = 'Лаборатория'; roomLabel.required = true; roomLabel.maxLength = 100; roomLabel.setAttribute('aria-label','Название кабинета');
-  saveRoom.type = 'submit'; configForm.append(roomCode,roomLabel,saveRoom); config.append(configForm,configMsg); app.append(config);
+  saveRoom.type = 'submit'; configForm.append(roomCode,roomLabel,saveRoom); config.append(configForm,configMsg); if (['demo','admin'].includes(identity.role)) app.append(config);
   configForm.addEventListener('submit',async e => {
     e.preventDefault(); saveRoom.disabled = true;
     try {
@@ -196,4 +197,4 @@ async function analytics() {
   await refresh(); subscribe(refresh);
 }
 app.replaceChildren();
-(mode === '/kiosk' ? kiosk() : mode === '/staff' ? staff() : mode === '/board' ? board() : mode === '/analytics' ? analytics() : Promise.resolve(home())).catch(e => app.replaceChildren(node('h1','Не удалось загрузить интерфейс'),node('p',e.message,'error')));
+(mode === '/kiosk' ? kiosk() : mode === '/staff' ? staff() : mode === '/board' ? board() : mode === '/analytics' ? analytics() : ['/admin','/pair'].includes(mode) ? Promise.resolve() : Promise.resolve(home())).catch(e => app.replaceChildren(node('h1','Не удалось загрузить интерфейс'),node('p',e.message,'error')));

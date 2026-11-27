@@ -18,11 +18,11 @@ def test_import_preserves_ids_and_legs(tmp_path, postgres_url, version):
     source.act('101',ticket['id'],'start')
     source.transfer('101',ticket['id'],'102')
     expected = source.history(ticket['id'])
-    if version == 2:
-        with closing(sqlite3.connect(path)) as con:
+    with closing(sqlite3.connect(path)) as con:
+        if version == 2:
             con.execute('DROP TABLE command_keys')
-            con.execute('PRAGMA user_version=2')
-            con.commit()
+        con.execute(f'PRAGMA user_version={version}')
+        con.commit()
     with closing(sqlite3.connect(path)) as con:
         original_version = con.execute('PRAGMA user_version').fetchone()[0]
     counts = import_demo(path, postgres_url)

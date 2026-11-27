@@ -40,8 +40,8 @@ def import_demo(source, target_url):
             counts = {}
             with engine.begin() as dst:
                 dst.execute(text('SELECT pg_advisory_xact_lock(hashtext(current_schema()), 31303)'))
-                if dst.execute(text('SELECT version_num FROM alembic_version')).scalar_one_or_none() != '0001_core':
-                    raise ValueError('Target schema must be at 0001_core')
+                if dst.execute(text('SELECT version_num FROM alembic_version')).scalar_one_or_none() != '0002_security':
+                    raise ValueError('Target schema must be at 0002_security')
                 # Never merge into or truncate a populated target.
                 for table in TABLES:
                     if dst.execute(text(f'SELECT COUNT(*) FROM {table}')).scalar_one():

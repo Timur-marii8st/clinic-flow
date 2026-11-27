@@ -91,7 +91,7 @@ class PostgresStore:
             if not inspect(conn).has_table('alembic_version'):
                 raise RuntimeError('PostgreSQL schema missing: run alembic upgrade head')
             revision = conn.execute(text('SELECT version_num FROM alembic_version')).scalar_one_or_none()
-            if revision != '0001_core':
+            if revision != '0002_security':
                 raise RuntimeError('PostgreSQL schema mismatch: run the current migrations')
 
     def close(self):
