@@ -7,14 +7,15 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 from fastapi.security import HTTPBasic, HTTPBasicCredentials
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
-from .queue import Queue, QueueError
+from .queue import Queue, PostgresQueue, QueueError
+from .repositories.postgres import database_url_from_env
 
 STATIC = Path(__file__).parent / 'static'
 
@@ -44,6 +45,11 @@ class DemoAppointment(BaseModel):
     scheduled_at: datetime
 
 
+class RoomConfig(BaseModel):
+    room_id: str = Field(min_length=1, max_length=16, pattern=r'^[A-Za-z0-9_-]+$')
+    label: str = Field(min_length=1, max_length=100)
+
+
 class Changes:
     """Wake connected displays after a commit; no queue payload in the stream."""
     def __init__(self):
@@ -64,18 +70,25 @@ class Changes:
             return self.generation
 
 
-def create_app(db_path: str | Path | None = None, staff_password: str | None = None) -> FastAPI:
-    queue = Queue(db_path or os.environ.get('CLINIC_DB_PATH', 'data/clinic.sqlite3'))
+def create_app(db_path: str | Path | None = None, staff_password: str | None = None,
+               database_url=None) -> FastAPI:
+    if db_path is not None and database_url is not None:
+        raise ValueError('Choose exactly one database')
+    url = database_url if database_url is not None else (database_url_from_env() if db_path is None else None)
+    queue = PostgresQueue(url) if url else Queue(db_path or os.environ.get('CLINIC_DB_PATH', 'data/clinic.sqlite3'))
     password = os.environ.get('CLINIC_STAFF_PASSWORD', '') if staff_password is None else staff_password
     basic = HTTPBasic(auto_error=False)
     changes = Changes()
 
     @asynccontextmanager
     async def lifespan(_app):
-        await run_in_threadpool(queue.initialize)
-        yield
+        try:
+            await run_in_threadpool(queue.initialize)
+            yield
+        finally:
+            await run_in_threadpool(queue.close)
 
-    app = FastAPI(title='Clinic Flow Demo', version='0.2.0', lifespan=lifespan,
+    app = FastAPI(title='Clinic Flow Demo', version='0.3.0', lifespan=lifespan,
                   description='Локальный прототип. Только синтетические данные. Опциональный общий пароль персонала не заменяет промышленную IAM.')
     app.mount('/static', StaticFiles(directory=STATIC), name='static')
 
@@ -127,7 +140,7 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
     @app.get('/health')
     def health():
         queue.rooms()
-        return {'status': 'ok', 'mode': 'demo', 'version': '0.2.0'}
+        return {'status': 'ok', 'mode': 'demo', 'version': '0.3.0'}
 
     @app.get('/api/rooms')
     def rooms():
@@ -144,6 +157,10 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
     @app.post('/api/staff/demo-appointments', dependencies=staff_deps, status_code=201)
     async def book_demo(data: DemoAppointment):
         return await mutate(queue.book_demo, data.booking_code, data.room_id, data.scheduled_at)
+
+    @app.post('/api/staff/rooms', dependencies=staff_deps)
+    async def configure_room(data: RoomConfig):
+        return await mutate(queue.upsert_room, data.room_id, data.label)
 
     @app.get('/api/staff/{room_id}', dependencies=staff_deps)
     def staff_view(room_id: str):
@@ -162,16 +179,18 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         return queue.analytics()
 
     @app.post('/api/staff/{room_id}/call-next', dependencies=staff_deps)
-    async def call_next(room_id: str):
-        return await mutate(queue.call_next, room_id)
+    async def call_next(room_id: str, request_key: str | None = Header(default=None, alias='Idempotency-Key', min_length=16, max_length=100)):
+        return await mutate(queue.call_next, room_id, request_key)
 
     @app.post('/api/staff/{room_id}/tickets/{ticket_id}/action', dependencies=staff_deps)
-    async def ticket_action(room_id: str, ticket_id: int, data: Action):
-        return await mutate(queue.act, room_id, ticket_id, data.action, data.expected_version)
+    async def ticket_action(room_id: str, ticket_id: int, data: Action,
+                            request_key: str | None = Header(default=None, alias='Idempotency-Key', min_length=16, max_length=100)):
+        return await mutate(queue.act, room_id, ticket_id, data.action, data.expected_version, request_key)
 
     @app.post('/api/staff/{room_id}/tickets/{ticket_id}/transfer', dependencies=staff_deps)
-    async def transfer(room_id: str, ticket_id: int, data: Transfer):
-        return await mutate(queue.transfer, room_id, ticket_id, data.target_room, data.expected_version)
+    async def transfer(room_id: str, ticket_id: int, data: Transfer,
+                       request_key: str | None = Header(default=None, alias='Idempotency-Key', min_length=16, max_length=100)):
+        return await mutate(queue.transfer, room_id, ticket_id, data.target_room, data.expected_version, request_key)
 
     @app.get('/api/board')
     def board():

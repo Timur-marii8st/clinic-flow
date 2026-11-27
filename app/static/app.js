@@ -7,8 +7,8 @@ const button = (text, fn, secondary = false) => { const b = node('button', text,
 const minutes = s => s === null ? '—' : `${(s / 60).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} мин`;
 const clock = s => s ? new Date(s).toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit' }) : '—';
 const uid = () => { const bytes = new Uint8Array(16); crypto.getRandomValues(bytes); return Array.from(bytes, x => x.toString(16).padStart(2,'0')).join(''); };
-async function api(path, body) {
-  const res = await fetch(path, { cache:'no-store', credentials:'same-origin', signal:AbortSignal.timeout(5000), ...(body !== undefined ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) } : {}) });
+async function api(path, body, requestKey) {
+  const res = await fetch(path, { cache:'no-store', credentials:'same-origin', signal:AbortSignal.timeout(5000), ...(body !== undefined ? { method:'POST', headers:{'Content-Type':'application/json', ...(requestKey ? {'Idempotency-Key':requestKey} : {})}, body:JSON.stringify(body) } : {}) });
   const data = await res.json();
   if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Проверьте введённые данные');
   return data;
@@ -111,7 +111,16 @@ async function staff() {
   async function mutate(path,body) {
     if (busy || !connected) return;
     busy = true; ++seq; call.disabled = true; panel.querySelectorAll('button').forEach(b => b.disabled = true); select.disabled = true;
-    try { await api(path,body); message(msg,'Действие выполнено'); } catch(e) { message(msg,e.message,true); }
+    const key = uid();
+    try {
+      try { await api(path,body,key); }
+      catch (e) {
+        // Retry only transport failures, with exactly the same command key.
+        if (!(e instanceof TypeError || e.name === 'TimeoutError' || e.name === 'AbortError')) throw e;
+        await api(path,body,key);
+      }
+      message(msg,'Действие выполнено');
+    } catch(e) { message(msg,e.message + ' Проверьте актуальную очередь перед повтором.',true); }
     finally { busy = false; select.disabled = false; await refresh(); }
   }
   select.addEventListener('change',() => { connected = false; rows.replaceChildren(); absent.replaceChildren(); call.disabled = true; refresh(); });
@@ -120,6 +129,28 @@ async function staff() {
   code.placeholder = 'DEMO-TEST'; code.required = true; code.maxLength = 32; code.setAttribute('aria-label','Тестовый код записи'); date.type = 'datetime-local'; date.required = true; date.setAttribute('aria-label','Время приёма'); submit.type = 'submit';
   bookingForm.append(code,dest,date,submit); booking.append(bookingForm,result); app.append(booking);
   bookingForm.addEventListener('submit',async e => { e.preventDefault(); submit.disabled = true; try { await api('/api/staff/demo-appointments',{booking_code:code.value,room_id:dest.value,scheduled_at:new Date(date.value).toISOString()}); message(result,'Запись создана. Подтвердите её в терминале.'); } catch(e) { message(result,e.message,true); } finally { submit.disabled = false; } });
+  const config = node('details',undefined,'panel');
+  config.append(node('summary','Управление кабинетами (демо)'));
+  const configForm = node('form',undefined,'row'), roomCode = node('input'), roomLabel = node('input'), saveRoom = node('button','Сохранить кабинет'), configMsg = notice();
+  roomCode.placeholder = 'LAB-1'; roomCode.required = true; roomCode.maxLength = 16; roomCode.pattern = '[A-Za-z0-9_\\-]+'; roomCode.setAttribute('aria-label','Код кабинета');
+  roomLabel.placeholder = 'Лаборатория'; roomLabel.required = true; roomLabel.maxLength = 100; roomLabel.setAttribute('aria-label','Название кабинета');
+  saveRoom.type = 'submit'; configForm.append(roomCode,roomLabel,saveRoom); config.append(configForm,configMsg); app.append(config);
+  configForm.addEventListener('submit',async e => {
+    e.preventDefault(); saveRoom.disabled = true;
+    try {
+      await api('/api/staff/rooms',{room_id:roomCode.value,label:roomLabel.value});
+      const updated = await api('/api/rooms');
+      rooms.splice(0,rooms.length,...updated);
+      for (const s of [select,dest]) {
+        const previous = s.value;
+        s.replaceChildren(...Array.from(roomSelect(rooms).options));
+        s.value = rooms.some(r => r.id === previous) ? previous : rooms[0].id;
+      }
+      message(configMsg,'Кабинет сохранён. Другие интерфейсы можно обновить.');
+      await refresh();
+    } catch(e) { message(configMsg,e.message,true); }
+    finally { saveRoom.disabled = false; }
+  });
   await refresh(); subscribe(refresh);
 }
 async function board() {

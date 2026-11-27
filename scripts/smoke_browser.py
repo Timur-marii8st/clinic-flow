@@ -33,7 +33,7 @@ with tempfile.TemporaryDirectory() as tmp:
             else:
                 raise RuntimeError('Server did not start')
             with sync_playwright() as p:
-                browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN','/usr/bin/chromium'),headless=True,args=['--no-sandbox'])
+                browser = p.chromium.launch(executable_path=os.environ.get('CHROMIUM_BIN'),headless=True,args=['--no-sandbox'])
                 context = browser.new_context()
                 kiosk, staff, board, analytics = [context.new_page() for _ in range(4)]
                 errors = []
