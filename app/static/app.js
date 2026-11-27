@@ -129,6 +129,28 @@ async function staff() {
   code.placeholder = 'DEMO-TEST'; code.required = true; code.maxLength = 32; code.setAttribute('aria-label','Тестовый код записи'); date.type = 'datetime-local'; date.required = true; date.setAttribute('aria-label','Время приёма'); submit.type = 'submit';
   bookingForm.append(code,dest,date,submit); booking.append(bookingForm,result); app.append(booking);
   bookingForm.addEventListener('submit',async e => { e.preventDefault(); submit.disabled = true; try { await api('/api/staff/demo-appointments',{booking_code:code.value,room_id:dest.value,scheduled_at:new Date(date.value).toISOString()}); message(result,'Запись создана. Подтвердите её в терминале.'); } catch(e) { message(result,e.message,true); } finally { submit.disabled = false; } });
+  const config = node('details',undefined,'panel');
+  config.append(node('summary','Управление кабинетами (демо)'));
+  const configForm = node('form',undefined,'row'), roomCode = node('input'), roomLabel = node('input'), saveRoom = node('button','Сохранить кабинет'), configMsg = notice();
+  roomCode.placeholder = 'LAB-1'; roomCode.required = true; roomCode.maxLength = 16; roomCode.pattern = '[A-Za-z0-9_\\-]+'; roomCode.setAttribute('aria-label','Код кабинета');
+  roomLabel.placeholder = 'Лаборатория'; roomLabel.required = true; roomLabel.maxLength = 100; roomLabel.setAttribute('aria-label','Название кабинета');
+  saveRoom.type = 'submit'; configForm.append(roomCode,roomLabel,saveRoom); config.append(configForm,configMsg); app.append(config);
+  configForm.addEventListener('submit',async e => {
+    e.preventDefault(); saveRoom.disabled = true;
+    try {
+      await api('/api/staff/rooms',{room_id:roomCode.value,label:roomLabel.value});
+      const updated = await api('/api/rooms');
+      rooms.splice(0,rooms.length,...updated);
+      for (const s of [select,dest]) {
+        const previous = s.value;
+        s.replaceChildren(...Array.from(roomSelect(rooms).options));
+        s.value = rooms.some(r => r.id === previous) ? previous : rooms[0].id;
+      }
+      message(configMsg,'Кабинет сохранён. Другие интерфейсы можно обновить.');
+      await refresh();
+    } catch(e) { message(configMsg,e.message,true); }
+    finally { saveRoom.disabled = false; }
+  });
   await refresh(); subscribe(refresh);
 }
 async function board() {
