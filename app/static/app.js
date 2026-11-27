@@ -7,8 +7,8 @@ const button = (text, fn, secondary = false) => { const b = node('button', text,
 const minutes = s => s === null ? '—' : `${(s / 60).toLocaleString('ru-RU', { maximumFractionDigits: 1 })} мин`;
 const clock = s => s ? new Date(s).toLocaleTimeString('ru-RU', { hour:'2-digit', minute:'2-digit' }) : '—';
 const uid = () => { const bytes = new Uint8Array(16); crypto.getRandomValues(bytes); return Array.from(bytes, x => x.toString(16).padStart(2,'0')).join(''); };
-async function api(path, body) {
-  const res = await fetch(path, { cache:'no-store', credentials:'same-origin', signal:AbortSignal.timeout(5000), ...(body !== undefined ? { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify(body) } : {}) });
+async function api(path, body, requestKey) {
+  const res = await fetch(path, { cache:'no-store', credentials:'same-origin', signal:AbortSignal.timeout(5000), ...(body !== undefined ? { method:'POST', headers:{'Content-Type':'application/json', ...(requestKey ? {'Idempotency-Key':requestKey} : {})}, body:JSON.stringify(body) } : {}) });
   const data = await res.json();
   if (!res.ok) throw new Error(typeof data.detail === 'string' ? data.detail : 'Проверьте введённые данные');
   return data;
@@ -111,7 +111,16 @@ async function staff() {
   async function mutate(path,body) {
     if (busy || !connected) return;
     busy = true; ++seq; call.disabled = true; panel.querySelectorAll('button').forEach(b => b.disabled = true); select.disabled = true;
-    try { await api(path,body); message(msg,'Действие выполнено'); } catch(e) { message(msg,e.message,true); }
+    const key = uid();
+    try {
+      try { await api(path,body,key); }
+      catch (e) {
+        // Retry only transport failures, with exactly the same command key.
+        if (!(e instanceof TypeError || e.name === 'TimeoutError' || e.name === 'AbortError')) throw e;
+        await api(path,body,key);
+      }
+      message(msg,'Действие выполнено');
+    } catch(e) { message(msg,e.message + ' Проверьте актуальную очередь перед повтором.',true); }
     finally { busy = false; select.disabled = false; await refresh(); }
   }
   select.addEventListener('change',() => { connected = false; rows.replaceChildren(); absent.replaceChildren(); call.disabled = true; refresh(); });

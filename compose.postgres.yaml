@@ -1,0 +1,38 @@
+# Local synthetic-data demo. Requires CLINIC_POSTGRES_PASSWORD in environment/.env.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: clinic
+      POSTGRES_USER: clinic
+      POSTGRES_PASSWORD: "${CLINIC_POSTGRES_PASSWORD:?Set a local PostgreSQL password}"
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinic -d clinic"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  clinic-flow:
+    build: .
+    environment:
+      CLINIC_POSTGRES_HOST: db
+      CLINIC_POSTGRES_DB: clinic
+      CLINIC_POSTGRES_USER: clinic
+      CLINIC_POSTGRES_PASSWORD: "${CLINIC_POSTGRES_PASSWORD:?Set a local PostgreSQL password}"
+      CLINIC_STAFF_PASSWORD: "${CLINIC_STAFF_PASSWORD:-}"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-ec", "python -m alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000"]
+    ports:
+      - "127.0.0.1:8000:8000"
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+volumes:
+  pg-data:
