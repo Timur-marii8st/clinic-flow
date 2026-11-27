@@ -1,0 +1,53 @@
+# Synthetic single-clinic HTTPS staging. External trusted OIDC provider required.
+# Unlike demo profiles the application and database have no host ports.
+services:
+  db:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_DB: clinic
+      POSTGRES_USER: clinic
+      POSTGRES_PASSWORD: "${CLINIC_POSTGRES_PASSWORD:?Set a PostgreSQL password}"
+    volumes:
+      - secure-pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U clinic -d clinic"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+    restart: unless-stopped
+  clinic-flow:
+    build: .
+    environment:
+      CLINIC_MODE: secure
+      CLINIC_POSTGRES_HOST: db
+      CLINIC_POSTGRES_DB: clinic
+      CLINIC_POSTGRES_USER: clinic
+      CLINIC_POSTGRES_PASSWORD: "${CLINIC_POSTGRES_PASSWORD:?Set a PostgreSQL password}"
+      CLINIC_PUBLIC_ORIGIN: "${CLINIC_PUBLIC_ORIGIN:?Set HTTPS origin}"
+      CLINIC_OIDC_ISSUER: "${CLINIC_OIDC_ISSUER:?Set trusted HTTPS OIDC issuer}"
+      CLINIC_OIDC_CLIENT_ID: "${CLINIC_OIDC_CLIENT_ID:?Set OIDC client ID}"
+      CLINIC_OIDC_CLIENT_SECRET: "${CLINIC_OIDC_CLIENT_SECRET:?Set OIDC client secret}"
+      CLINIC_BOOTSTRAP_SUBJECT: "${CLINIC_BOOTSTRAP_SUBJECT:?Set administrator OIDC subject}"
+    depends_on:
+      db:
+        condition: service_healthy
+    command: ["sh", "-ec", "python -m alembic upgrade head && exec uvicorn app.main:app --host 0.0.0.0 --port 8000 --no-access-log"]
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+  nginx:
+    image: nginx:stable-alpine
+    depends_on:
+      clinic-flow:
+        condition: service_healthy
+    ports:
+      - "127.0.0.1:8443:443"
+    volumes:
+      - ./deploy/nginx/clinic.conf:/etc/nginx/conf.d/default.conf:ro
+      - "${CLINIC_TLS_DIR:-./local-tls}:/etc/nginx/tls:ro"
+    restart: unless-stopped
+volumes:
+  secure-pg-data:

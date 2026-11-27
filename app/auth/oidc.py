@@ -85,7 +85,7 @@ class OIDCClient:
             metadata=await self._discovery(client)
         challenge=base64.urlsafe_b64encode(hashlib.sha256(verifier.encode()).digest()).decode().rstrip('=')
         params={'client_id':self.settings.client_id,'redirect_uri':self.settings.callback_url,
-                'response_type':'code','scope':'openid','state':state,'nonce':nonce,
+                'response_type':'code','scope':'openid','state':state,'nonce':nonce,'prompt':'login',
                 'code_challenge':challenge,'code_challenge_method':'S256'}
         return metadata['authorization_endpoint']+'?'+urlencode(params)
 

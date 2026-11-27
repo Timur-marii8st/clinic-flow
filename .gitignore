@@ -9,3 +9,6 @@ __pycache__/
 data/
 *.sqlite3*
 .DS_Store
+local-tls/
+*.pem
+*.key

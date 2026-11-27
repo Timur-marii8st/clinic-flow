@@ -79,7 +79,8 @@ class QueueService:
     def _event(con, ticket_id, action, old_status, new_status, ts):
         con.execute('INSERT INTO events(ticket_id,action,old_status,new_status,created_at) VALUES (?,?,?,?,?)',
                     (ticket_id, action, old_status, new_status, ts))
-        audit(con, action, 'ticket', ticket_id, {'from':old_status,'to':new_status})
+        row = con.execute('SELECT room_id FROM tickets WHERE id=?',(ticket_id,)).fetchone()
+        audit(con, action, 'ticket', ticket_id, {'from':old_status,'to':new_status,'room':row['room_id']})
 
     @staticmethod
     def _public(row):

@@ -1,0 +1,12 @@
+# Keycloak / OIDC setup (test realm)
+
+Clinic Flow is a confidential web client; it does not embed or provision a Keycloak server. Deploy a currently supported patched Keycloak version according to the official operator documentation or use an institution-approved IdP. The issuer and discovery, authorization, token and JWKS endpoints must use HTTPS and the same trusted origin. Trust the certificate inside the application container (institutional CA if required). Do not disable TLS verification.
+
+1. Create an isolated realm (for example clinic-demo) with synthetic users. Disable self-registration unless explicitly needed; enforce password/MFA policies through the IdP.
+2. Create an OpenID Connect client named clinic-flow. Enable client authentication, Standard flow (authorization code), PKCE S256. Disable Direct access grants, Implicit flow and service accounts. Sign ID tokens with RS256. Use client_secret_basic at the token endpoint.
+3. Set Valid Redirect URIs to the **exact** https://localhost:8443/auth/callback (or the configured public origin + /auth/callback). No wildcards. Set Web Origins to the exact public origin if required; Clinic Flow uses a server-side callback and does not need cross-origin token calls.
+4. Obtain the generated client secret via the IdP admin console; keep it outside Git. Obtain the exact OIDC subject (sub) of the bootstrap administrator from the configured realm/client; do not use email or username as a stable identity. In a default Keycloak realm it normally equals the user UUID; confirm this for your subject mapper.
+5. Configure CLINIC_OIDC_ISSUER=https://<trusted-idp>/realms/<realm>, CLINIC_OIDC_CLIENT_ID, CLINIC_OIDC_CLIENT_SECRET, CLINIC_BOOTSTRAP_SUBJECT, CLINIC_PUBLIC_ORIGIN and the database/TLS settings. Run compose.secure.yaml. Login as bootstrap admin; add permitted OIDC subjects and local roles through /admin.
+6. Test login, logout, blocked user, scoped doctor, device pairing/revocation, expired state and incorrect issuer/audience. No external token roles are trusted; Clinic Flow roles are local to the single-clinic deployment.
+
+Current integration is exercised by a synthetic HTTPS OIDC provider in CI with actual RSA signatures, not by a live Keycloak server. Run an actual provider integration and TLS deployment test before any pilot. Local logout revokes Clinic Flow session; it does not terminate all IdP sessions. Login sends prompt=login; confirm IdP policy and shared-workstation workflow.

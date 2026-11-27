@@ -6,6 +6,7 @@ import hmac
 import os
 from pathlib import Path
 from typing import Literal
+from urllib.parse import urlsplit
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Request
 from fastapi.responses import FileResponse, JSONResponse, StreamingResponse, RedirectResponse
@@ -83,6 +84,8 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
     basic = HTTPBasic(auto_error=False)
     changes = Changes()
     settings = security_settings if security_settings is not None else SecuritySettings.from_env()
+    if settings and not url and db_path is None:
+        raise RuntimeError('Secure profile requires PostgreSQL; SQLite is available only for explicit test instances')
     auth = AuthStore(queue, settings.bootstrap_subject if settings else None)
     oidc = oidc_client or (OIDCClient(settings) if settings else None)
 
@@ -130,7 +133,9 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         origin = request.headers.get('origin')
         expected_origin = settings.public_origin if settings else f'{request.url.scheme}://{request.url.netloc}'
         request.state.principal = None
-        if request.method == 'POST' and (request.headers.get('sec-fetch-site') == 'cross-site' or
+        if settings and request.url.path != '/health' and request.headers.get('host','').lower() != urlsplit(settings.public_origin).netloc.lower():
+            response = JSONResponse({'detail':'Некорректный Host'},status_code=400)
+        elif request.method == 'POST' and (request.headers.get('sec-fetch-site') == 'cross-site' or
                 (origin != expected_origin if settings else bool(origin and origin != expected_origin)) or
                 request.headers.get('content-type', '').split(';')[0].strip().lower() != 'application/json'):
             response = JSONResponse(status_code=403, content={'detail': 'Разрешены только same-origin JSON запросы'})
