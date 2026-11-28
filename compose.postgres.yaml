@@ -34,5 +34,22 @@ services:
       interval: 15s
       timeout: 5s
       retries: 3
+  mock-mis:
+    profiles: ["mock-mis"]
+    build: .
+    environment:
+      CLINIC_POSTGRES_HOST: db
+      CLINIC_POSTGRES_DB: clinic
+      CLINIC_POSTGRES_USER: clinic
+      CLINIC_POSTGRES_PASSWORD: "${CLINIC_POSTGRES_PASSWORD:?Set a local PostgreSQL password}"
+      CLINIC_MOCK_MIS_PATH: /app/mock/mis.sqlite3
+    volumes:
+      - mock-mis-data:/app/mock
+    depends_on:
+      clinic-flow:
+        condition: service_healthy
+    command: ["python", "-m", "scripts.mock_mis", "worker"]
+    restart: unless-stopped
 volumes:
   pg-data:
+  mock-mis-data:

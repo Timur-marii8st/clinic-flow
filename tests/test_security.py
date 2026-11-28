@@ -142,6 +142,8 @@ def test_room_roles_and_audit(secure):
     assert c.get('/api/staff/102').status_code==403
     assert c.get('/api/staff/102/no-shows').status_code==403
     assert c.get('/api/admin/users').status_code==403
+    assert c.get('/api/integration/status').status_code==403
+    assert c.post('/api/integration/retry',json={},headers=ORIGIN).status_code==403
     assert c.get('/api/analytics').status_code==403
     assert c.get('/api/staff/tickets/'+str(second['id'])+'/history').status_code==403
     assert post(c,'/api/walk-in',{'room_id':'101'}).status_code==403
@@ -163,6 +165,8 @@ def test_room_roles_and_audit(secure):
     assert post(c,f"/api/staff/101/tickets/{first['id']}/transfer",{'target_room':'102'}).status_code==200
     c.cookies.clear()
     c.cookies.set(SESSION,admin,domain='clinic.example',path='/')
+    assert c.get('/api/integration/status').status_code==200
+    assert c.get('/api/integration/conflicts').json()==[]
     audit=c.get('/api/admin/audit').json()
     entries=[x for x in audit if x['actor']=='staff:doctor-sub' and x['object_id']==str(first['id'])]
     assert {x['action'] for x in entries}=={'call','start'}
