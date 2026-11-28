@@ -34,6 +34,11 @@ jobs:
       - run: python -m pytest -q -rs
       - run: node --check app/static/app.js && node --check app/static/security.js && node --check app/static/audio.js
       - run: python scripts/smoke_sse.py
+      - run: python -m scripts.smoke_postgres_backup
+        env:
+          CF_TEST_PG_CONTAINER: ${{ job.services.postgres.id }}
+      - run: python -m scripts.load_smoke --postgres --screens 50 --staff 20 --kiosks 5 --seconds 8
+      - run: python -m scripts.simulate_flow --patients 100 --seed 42
   browser:
     runs-on: ubuntu-latest
     steps:

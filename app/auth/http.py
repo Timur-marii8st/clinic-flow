@@ -92,12 +92,22 @@ def policy(method,path,principal):
     if ((method=='GET' and path in ('/api/integration/status','/api/integration/conflicts')) or
         (method=='POST' and path in ('/api/integration/resolve','/api/integration/retry'))):
         return allowed({'admin'})
-    if method=='GET' and path=='/api/analytics':
+    if method=='GET' and path in ('/api/analytics','/api/pilot/analytics'):
         return allowed({'admin','analyst'})
     if method=='POST' and path in ('/api/check-in','/api/walk-in','/api/check-in/qr'):
         return allowed(REGISTRATION)
     if method=='POST' and path in ('/api/staff/demo-appointments','/api/staff/qr'):
         return allowed({'admin','registrar'})
+    if method=='GET' and path=='/api/routes/templates':
+        return allowed({'admin','registrar'})
+    if method=='POST' and path=='/api/routes/templates':
+        return allowed({'admin'})
+    if method=='POST' and re.fullmatch(r'/api/staff/[A-Za-z0-9_-]{1,16}/tickets/[0-9]+/route/attach',path):
+        return allowed({'admin','registrar'},path.split('/')[3])
+    if method=='GET' and re.fullmatch(r'/api/staff/[A-Za-z0-9_-]{1,16}/tickets/[0-9]+/route',path):
+        return allowed(QUEUE,path.split('/')[3])
+    if method=='POST' and re.fullmatch(r'/api/staff/[A-Za-z0-9_-]{1,16}/tickets/[0-9]+/route/advance',path):
+        return allowed(QUEUE,path.split('/')[3])
     if method=='POST' and path=='/api/staff/rooms':
         return allowed({'admin'})
     if method=='POST' and path=='/api/devices/heartbeat':

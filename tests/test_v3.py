@@ -133,7 +133,7 @@ def test_api_v3(backend, tmp_path, request):
     options = {'database_url':request.getfixturevalue('postgres_url')} if backend=='postgres' else {'db_path':tmp_path/'api.db'}
     with TestClient(create_app(staff_password='synthetic-test-password',**options)) as c:
         auth = ('staff','synthetic-test-password')
-        assert c.get('/health').json()['version'] == '0.6.0'
+        assert c.get('/health').json()['version'] == '0.7.0'
         assert c.post('/api/staff/rooms',json={'room_id':'LAB','label':'Лаборатория'}).status_code==401
         assert c.post('/api/staff/rooms',json={'room_id':'LAB','label':'Лаборатория'},auth=auth).status_code==200
         assert c.post('/api/staff/rooms',json={'room_id':'bad/slash','label':'Test'},auth=auth).status_code==422

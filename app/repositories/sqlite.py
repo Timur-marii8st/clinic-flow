@@ -5,6 +5,7 @@ import sqlite3
 from app.auth.schema import DDL
 from app.integrations.schema import DDL as MIS_DDL
 from app.devices.schema import DDL as DEVICE_DDL
+from app.routing.schema import DDL as ROUTE_DDL
 
 
 class SQLiteStore:
@@ -32,7 +33,7 @@ class SQLiteStore:
         with closing(sqlite3.connect(self.path, timeout=10, isolation_level=None)) as con:
             con.execute('PRAGMA journal_mode=WAL')
         with self.connection(write=True) as con:
-            if con.execute('PRAGMA user_version').fetchone()[0] > 6:
+            if con.execute('PRAGMA user_version').fetchone()[0] > 7:
                 raise RuntimeError('Unsupported newer SQLite schema')
             con.execute('CREATE TABLE IF NOT EXISTS rooms (id TEXT PRIMARY KEY, label TEXT NOT NULL)')
             con.execute('''CREATE TABLE IF NOT EXISTS tickets (
@@ -76,9 +77,9 @@ class SQLiteStore:
             con.execute('''CREATE TABLE IF NOT EXISTS command_keys (
                 request_key TEXT PRIMARY KEY, fingerprint TEXT NOT NULL,
                 response TEXT NOT NULL, created_at TEXT NOT NULL)''')
-            for statement in (*DDL,*MIS_DDL,*DEVICE_DDL):
+            for statement in (*DDL,*MIS_DDL,*DEVICE_DDL,*ROUTE_DDL):
                 con.execute(statement)
-            con.execute('PRAGMA user_version=6')
+            con.execute('PRAGMA user_version=7')
 
     def close(self):
         pass

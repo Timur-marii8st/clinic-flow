@@ -20,6 +20,9 @@ from .repositories.postgres import database_url_from_env
 from .auth.oidc import SecuritySettings, OIDCClient
 from .integrations.http import install_integration_routes
 from .devices.http import install_device_routes
+from .routing.http import install_routing_routes
+from .monitoring import Metrics
+from .board_cache import BoardSnapshots
 from .auth.store import AuthStore, acting_as
 from .auth.http import install_routes, resolve, policy, require_room, STAFF, QUEUE, BOARD, REGISTRATION
 
@@ -85,6 +88,7 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
     password = os.environ.get('CLINIC_STAFF_PASSWORD', '') if staff_password is None else staff_password
     basic = HTTPBasic(auto_error=False)
     changes = Changes()
+    board_snapshots = BoardSnapshots(queue,changes)
     settings = security_settings if security_settings is not None else SecuritySettings.from_env()
     if settings and not url and db_path is None:
         raise RuntimeError('Secure profile requires PostgreSQL; SQLite is available only for explicit test instances')
@@ -100,11 +104,13 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         finally:
             await run_in_threadpool(queue.close)
 
-    app = FastAPI(title='Clinic Flow', version='0.6.0', lifespan=lifespan,
+    app = FastAPI(title='Clinic Flow', version='0.7.0', lifespan=lifespan,
                   docs_url=None if settings else '/docs', redoc_url=None if settings else '/redoc',
                   openapi_url=None if settings else '/openapi.json',
                   description='Только синтетические данные. Secure-профиль требует OIDC, HTTPS и зарегистрированные устройства.')
     app.mount('/static', StaticFiles(directory=STATIC), name='static')
+    metrics=Metrics(queue,secure=bool(settings))
+    metrics.install(app)
 
     def staff_only(credentials: HTTPBasicCredentials | None = Depends(basic)):
         if settings or not password:
@@ -135,7 +141,7 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         origin = request.headers.get('origin')
         expected_origin = settings.public_origin if settings else f'{request.url.scheme}://{request.url.netloc}'
         request.state.principal = None
-        if settings and request.url.path != '/health' and request.headers.get('host','').lower() != urlsplit(settings.public_origin).netloc.lower():
+        if settings and request.url.path not in ('/health','/metrics') and request.headers.get('host','').lower() != urlsplit(settings.public_origin).netloc.lower():
             response = JSONResponse({'detail':'Некорректный Host'},status_code=400)
         elif request.method == 'POST' and (request.headers.get('sec-fetch-site') == 'cross-site' or
                 (origin != expected_origin if settings else bool(origin and origin != expected_origin)) or
@@ -195,11 +201,12 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
     install_routes(app,settings,auth,oidc)
     install_integration_routes(app,queue,staff_deps,changes)
     install_device_routes(app,queue,staff_deps,mutate)
+    install_routing_routes(app,queue,staff_deps,mutate,settings)
 
     @app.get('/health')
     def health():
         queue.rooms()
-        return {'status': 'ok', 'mode': 'secure' if settings else 'demo', 'version': '0.6.0'}
+        return {'status': 'ok', 'mode': 'secure' if settings else 'demo', 'version': '0.7.0'}
 
     @app.get('/api/rooms')
     def rooms(request: Request):
@@ -256,8 +263,8 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         return await mutate(request,queue.transfer, room_id, ticket_id, data.target_room, data.expected_version, request_key)
 
     @app.get('/api/board')
-    def board(request: Request):
-        rows = queue.board()
+    async def board(request: Request):
+        rows = await board_snapshots.read()
         return [r for r in rows if request.state.principal.permits_room(r['room_id'])] if settings else rows
 
     @app.get('/api/events', include_in_schema=False)
@@ -267,6 +274,10 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
             yield 'event: refresh\ndata: {}\n\n'
             while not await request.is_disconnected():
                 new_version = await changes.wait(version)
+                if new_version != version:
+                    # Coalesce bursts of commits; subscribers fetch the latest snapshot.
+                    await asyncio.sleep(.075)
+                    new_version = changes.generation
                 if settings and await resolve(request,auth) != request.state.principal:
                     return
                 if new_version != version:

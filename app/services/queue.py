@@ -9,6 +9,7 @@ from statistics import median
 import hashlib
 from app.auth.store import actor_id, audit
 from app.integrations.outbox import enqueue
+from app.routing.state import summary,guard_transfer,finish_or_cancel
 
 from app.domain.queue_policy import (
     ACTIVE, DEMO_BOOKINGS, ROOMS, TRANSITIONS, QueueError,
@@ -179,8 +180,12 @@ class QueueService:
             self._room(con, room)
             ts = now()
             rows = con.execute("SELECT * FROM tickets WHERE room_id=? AND status IN ('waiting','called','serving')", (room,)).fetchall()
+            routes={r['ticket_id']:summary(r) for r in con.execute("""SELECT r.*,t.label,t.plan FROM visit_routes r
+                JOIN route_templates t ON t.id=r.template_id AND t.version=r.template_version
+                JOIN tickets q ON q.id=r.ticket_id WHERE q.room_id=? AND r.state='active'""",(room,))}
             return [{**self._public(r), 'source': r['source'], 'checked_in_at': r['checked_in_at'],
-                     'scheduled_at': r['scheduled_at'], 'version': r['updated_at'], 'eligible': eligible(r, ts)}
+                     'scheduled_at': r['scheduled_at'], 'version': r['updated_at'], 'eligible': eligible(r, ts),
+                     'route':routes.get(r['id'])}
                     for r in sorted(rows, key=lambda r: sort_key(r, ts))]
 
     def call_next(self, room, request_key=None):
@@ -232,6 +237,7 @@ class QueueService:
             target = TRANSITIONS.get((row['status'], action))
             if not target:
                 raise QueueError('Недопустимое действие для текущего статуса')
+            finish_or_cancel(con,ticket_id,action,now())
             return self._transition(con, row, action, target)
         return self._command('action', request_key, [room, ticket_id, action, expected_version], execute)
 
@@ -247,6 +253,7 @@ class QueueService:
             self._verify_version(row, expected_version)
             if row['status'] not in ACTIVE:
                 raise QueueError('Перенести можно только активный талон')
+            guard_transfer(con,ticket_id)
             ts = now()
             self._end_leg(con, ticket_id, ts, 'transferred')
             self._new_leg(con, ticket_id, target_room, ts)
