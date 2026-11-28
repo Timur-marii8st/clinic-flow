@@ -80,6 +80,9 @@ def policy(method,path,principal):
         return allowed(BOARD)
     if method=='GET' and path=='/api/events':
         return allowed(STAFF|{'board'})
+    if ((method=='GET' and path in ('/api/integration/status','/api/integration/conflicts')) or
+        (method=='POST' and path in ('/api/integration/resolve','/api/integration/retry'))):
+        return allowed({'admin'})
     if method=='GET' and path=='/api/analytics':
         return allowed({'admin','analyst'})
     if method=='POST' and path in ('/api/check-in','/api/walk-in'):
