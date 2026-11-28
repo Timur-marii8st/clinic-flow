@@ -12,7 +12,9 @@
       const Audio=window.AudioContext||window.webkitAudioContext;
       if(!Audio)throw new Error('Локальная озвучка не поддерживается браузером');
       if(!this.ctx)this.ctx=new Audio();
-      await this.ctx.resume();
+      let timer;
+      try { await Promise.race([this.ctx.resume(),new Promise((_,reject)=>{timer=setTimeout(()=>reject(new Error('Audio activation required')),2500);})]); }
+      finally { clearTimeout(timer); }
       if(this.buffers.size!==clips.length){
         this.buffers=new Map(await Promise.all(clips.map(async name=>{
           const res=await fetch('/static/audio/'+name+'.wav',{signal:AbortSignal.timeout(5000)});
@@ -21,7 +23,7 @@
         })));
       }
       this.enabled=true;
-      this.play('ready',this.run).catch(()=>this.fail());
+      this.play('ready',this.run).catch(()=>this.fail()).finally(()=>this.drain());
     }
     fail(){this.disable();this.onError('Не удалось воспроизвести локальное аудио. Используйте табло.');}
     disable(){this.enabled=false;this.reset();}

@@ -50,3 +50,5 @@ jobs:
       - run: python -m scripts.build_audio
       - run: python -m playwright install --with-deps chromium
       - run: python scripts/smoke_browser.py
+      - run: python scripts/smoke_devices.py
+      - run: bash -n deploy/kiosk/install.sh

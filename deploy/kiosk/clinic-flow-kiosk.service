@@ -1,6 +1,6 @@
 [Unit]
 Description=Clinic Flow dedicated Chromium kiosk
-After=graphical-session.target
+After=graphical-session-pre.target
 PartOf=graphical-session.target
 
 [Service]

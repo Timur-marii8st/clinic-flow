@@ -52,13 +52,15 @@ async function kiosk() {
   title('Добро пожаловать','Подтвердите запись кодом или QR, либо обратитесь к регистратору.');
   const rooms = await api('/api/rooms'), grid = node('section',undefined,'grid'), msg = notice(), result = node('section',undefined,'panel kiosk-result'), connection=node('p','Связь с сервером','muted');
   deviceFresh();
-  result.hidden = true; let busy = false, pending = null, qrPending = null, clearTimer = null, probing=false, online=true;
+  result.hidden = true; let busy = false, pending = null, qrPending = null, clearTimer = null, probing=false, online=true, connectionEpoch=0;
   function clearResult(){clearTimeout(clearTimer);result.hidden=true;result.replaceChildren();message(msg,'');}
   async function submit(path,body) {
     if (busy || !online) return false;
-    busy = true; clearResult(); grid.querySelectorAll('button').forEach(b => b.disabled = true);
+    busy = true; const startedEpoch=connectionEpoch; clearResult(); grid.querySelectorAll('button').forEach(b => b.disabled = true);
     try {
-      const t = await api(path,body); pending = null; qrPending=null; deviceFresh();
+      const t = await api(path,body);
+      if(startedEpoch!==connectionEpoch||!online){message(msg,'Проверьте связь и повторите тот же запрос.',true);return false;}
+      pending = null; qrPending=null; deviceFresh();
       result.replaceChildren(node('h2','Ваш талон'),node('div',t.code,'ticket'),node('p',`Кабинет ${t.room_id} · ${labels[t.status] || t.status}`),node('p','Следите за табло.','muted'),button('Готово',()=>{clearResult();input.focus();},true));
       result.hidden = false; message(msg,'Талон зарегистрирован.');clearTimer=setTimeout(()=>{clearResult();input.focus();},45000);
       return true;
@@ -78,7 +80,7 @@ async function kiosk() {
     }else{
       qrPending=null;ok=await submit('/api/check-in',{booking_code:value});
     }
-    if(ok){input.value='';input.focus();}
+    if(ok||value.startsWith('CF1:')){input.value='';input.focus();}else input.select();
   });
   p.append(node('div','01','step-number'),node('h2','Я записан'),node('p','Поднесите QR к USB-сканеру или введите код записи. Тестовые коды: DEMO-101, DEMO-102, DEMO-103.','muted'),form);
   const select = roomSelect(rooms), row = node('div',undefined,'row');
@@ -89,7 +91,7 @@ async function kiosk() {
   }));
   q.append(node('div','02','step-number'),node('h2','Без записи'),node('p','В реальной клинике маршрут определяет регистратура.','muted'),row);
   grid.append(p,q); app.append(connection,grid,msg,result);input.focus();
-  function lost(){online=false;deviceStale();connection.textContent='Нет связи. Обратитесь к регистратору.';connection.className='stale';clearResult();grid.querySelectorAll('button').forEach(b=>b.disabled=true);}
+  function lost(){if(online)connectionEpoch++;online=false;deviceStale();connection.textContent='Нет связи. Обратитесь к регистратору.';connection.className='stale';clearResult();grid.querySelectorAll('button').forEach(b=>b.disabled=true);}
   async function probe(){
     if(probing)return;probing=true;
     try{
@@ -223,14 +225,15 @@ async function board() {
   const audio=new window.ClinicAudio(error=>{
     deviceAudio=false;voiceMsg.textContent=error;voiceBtn.textContent='Включить озвучку';
   });
-  voiceBtn=button('Включить озвучку',async()=>{
+  async function toggleAudio(){
     voiceBtn.disabled=true;
     try{
       if(audio.enabled){audio.disable();deviceAudio=false;voiceBtn.textContent='Включить озвучку';voiceMsg.textContent='Звук выключен';}
       else{await audio.enable();deviceAudio=true;voiceBtn.textContent='Выключить озвучку';voiceMsg.textContent='Локальное аудио готово';}
     }catch{audio.disable();deviceAudio=false;voiceMsg.textContent='Локальные WAV не установлены или звук недоступен.';voiceBtn.textContent='Включить озвучку';}
     finally{voiceBtn.disabled=false;}
-  },true);
+  }
+  voiceBtn=button('Включить озвучку',toggleAudio,true);
   controls.append(voiceBtn,voiceMsg);app.append(controls,sync,grid);
   function invalidate(){
     if(!stale){epoch++;stale=true;}
@@ -262,6 +265,7 @@ async function board() {
   addEventListener('online',refresh);
   addEventListener('pagehide',()=>{disposed=true;clearInterval(watchdog);audio.disable();},{once:true});
   await refresh();subscribe(refresh);
+  if(new URLSearchParams(location.search).get('audio')==='1')toggleAudio();
 }
 async function analytics() {
   title('Аналитика потока','По последним 100 завершённым этапам каждого кабинета. Это не прогноз и не SLA.');
