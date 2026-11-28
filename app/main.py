@@ -18,6 +18,7 @@ from starlette.concurrency import run_in_threadpool
 from .queue import Queue, PostgresQueue, QueueError
 from .repositories.postgres import database_url_from_env
 from .auth.oidc import SecuritySettings, OIDCClient
+from .integrations.http import install_integration_routes
 from .auth.store import AuthStore, acting_as
 from .auth.http import install_routes, resolve, policy, require_room, STAFF, QUEUE, BOARD, REGISTRATION
 
@@ -98,7 +99,7 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         finally:
             await run_in_threadpool(queue.close)
 
-    app = FastAPI(title='Clinic Flow', version='0.4.0', lifespan=lifespan,
+    app = FastAPI(title='Clinic Flow', version='0.5.0', lifespan=lifespan,
                   docs_url=None if settings else '/docs', redoc_url=None if settings else '/redoc',
                   openapi_url=None if settings else '/openapi.json',
                   description='Только синтетические данные. Secure-профиль требует OIDC, HTTPS и зарегистрированные устройства.')
@@ -191,11 +192,12 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         return FileResponse(STATIC / 'index.html')
 
     install_routes(app,settings,auth,oidc)
+    install_integration_routes(app,queue,staff_deps,changes)
 
     @app.get('/health')
     def health():
         queue.rooms()
-        return {'status': 'ok', 'mode': 'secure' if settings else 'demo', 'version': '0.4.0'}
+        return {'status': 'ok', 'mode': 'secure' if settings else 'demo', 'version': '0.5.0'}
 
     @app.get('/api/rooms')
     def rooms(request: Request):

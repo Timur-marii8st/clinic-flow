@@ -8,6 +8,7 @@ import re
 from statistics import median
 import hashlib
 from app.auth.store import actor_id, audit
+from app.integrations.outbox import enqueue
 
 from app.domain.queue_policy import (
     ACTIVE, DEMO_BOOKINGS, ROOMS, TRANSITIONS, QueueError,
@@ -77,10 +78,11 @@ class QueueService:
 
     @staticmethod
     def _event(con, ticket_id, action, old_status, new_status, ts):
-        con.execute('INSERT INTO events(ticket_id,action,old_status,new_status,created_at) VALUES (?,?,?,?,?)',
-                    (ticket_id, action, old_status, new_status, ts))
+        event=con.execute('INSERT INTO events(ticket_id,action,old_status,new_status,created_at) VALUES (?,?,?,?,?) RETURNING id',
+                    (ticket_id, action, old_status, new_status, ts)).fetchone()
         row = con.execute('SELECT room_id FROM tickets WHERE id=?',(ticket_id,)).fetchone()
         audit(con, action, 'ticket', ticket_id, {'from':old_status,'to':new_status,'room':row['room_id']})
+        enqueue(con,event['id'],ticket_id,action,new_status,ts)
 
     @staticmethod
     def _public(row):
@@ -160,6 +162,8 @@ class QueueService:
                 return self._public(row)
             if row['status'] != 'booked':
                 raise QueueError('Запись уже обработана')
+            if con.execute('SELECT 1 FROM mis_appointments WHERE ticket_id=? AND conflict IS NOT NULL',(row['id'],)).fetchone():
+                raise QueueError('Уточните запись у регистратора')
             ts = now()
             con.execute('UPDATE tickets SET status=?,checked_in_at=?,updated_at=? WHERE id=?', ('waiting', ts, ts, row['id']))
             self._new_leg(con, row['id'], row['room_id'], ts)

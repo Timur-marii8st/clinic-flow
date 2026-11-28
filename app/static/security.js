@@ -50,10 +50,53 @@
       alert(codeOut,'Код (10 минут, одно использование): '+d.pairing_code);await refresh();
     }catch(e){alert(msg,e.message,true);}finally{create.disabled=false;}});
     deviceForm.append(devLabel,kind,room,create);devicePanel.append(deviceForm,codeOut,devices);root.append(devicePanel);
+    const integrationPanel=panel('Интеграция МИС'), integrationStatus=el('p'), conflicts=el('div'), dead=el('div');
+    integrationPanel.append(integrationStatus,btn('Обновить интеграцию',()=>refresh().catch(e=>alert(msg,e.message,true))),el('h3','Конфликты записей'),conflicts,el('h3','Недоставленные события'),dead);
+    root.append(integrationPanel);
+    function showIntegration(status,list) {
+      const o=status.outbox;
+      integrationStatus.textContent='Записи: '+status.appointments+' · Конфликты: '+status.conflicts+
+        ' · Входящие события: '+status.inbox+' · Курсоры: '+(status.cursors.map(c=>c.source+': '+c.position).join(', ')||'—')+
+        ' · Outbox: ожидание '+(o.pending||0)+', отправка '+(o.inflight||0)+', доставлено '+(o.delivered||0)+', ошибки '+(o.dead||0);
+      conflicts.replaceChildren();
+      if(!list.length)conflicts.append(el('p','Нет открытых конфликтов'));
+      for(const c of list){
+        const r=row(),reason=input('Причина решения','Укажите причину');
+        reason.maxLength=500;
+        const handle=async decision=>{
+          if(!reason.value.trim()){alert(msg,'Укажите причину решения',true);return;}
+          if(!confirm(decision==='apply'?'Применить внешний снимок, если это безопасно?':'Оставить локальную очередь без изменения?'))return;
+          apply.disabled=true;keep.disabled=true;
+          try{
+            await call('/api/integration/resolve',{source:c.source,external_id:c.external_id,version:c.version,
+              expected_conflict:c.conflict,decision,reason:reason.value});
+            alert(msg,'Конфликт обработан');await refresh();
+          }catch(e){alert(msg,e.message,true);}finally{apply.disabled=false;keep.disabled=false;}
+        };
+        const apply=btn('Применить',()=>handle('apply')),keep=btn('Оставить локально',()=>handle('keep_local'));
+        if(c.conflict==='version_collision')apply.disabled=true;
+        r.append(el('span',c.source+' / '+c.external_id+' · v'+c.version+' · '+c.conflict+
+          ' · кабинет '+c.desired.room_id+' · '+c.desired.state+' · '+new Date(c.desired.scheduled_at).toLocaleString('ru-RU')),reason,apply,keep);
+        conflicts.append(r);
+      }
+      dead.replaceChildren();
+      if(!status.dead_letters.length)dead.append(el('p','Нет событий в dead-letter'));
+      for(const e of status.dead_letters){
+        const r=row(),retry=btn('Повторить отправку',async()=>{
+          if(!confirm('Возобновить доставку события с тем же идентификатором?'))return;
+          retry.disabled=true;
+          try{await call('/api/integration/retry',{event_id:e.event_id});await refresh();}
+          catch(error){alert(msg,error.message,true);}finally{retry.disabled=false;}
+        });
+        r.append(el('span',e.source+' / '+e.external_id+' · попыток '+e.attempts+' · '+e.last_error),retry);
+        dead.append(r);
+      }
+    }
     const auditPanel=panel('Последние события аудита'), auditList=el('div');
     auditPanel.append(btn('Обновить',()=>refresh().catch(e=>alert(msg,e.message,true))),auditList);root.append(auditPanel);
     async function refresh() {
-      const [ul,dl,al]=await Promise.all(['/api/admin/users','/api/admin/devices','/api/admin/audit'].map(x=>call(x)));
+      const [ul,dl,al,ist,ic]=await Promise.all(['/api/admin/users','/api/admin/devices','/api/admin/audit','/api/integration/status','/api/integration/conflicts'].map(x=>call(x)));
+      showIntegration(ist,ic);
       users.replaceChildren();for(const u of ul){const r=row();r.append(el('span',u.label+' · '+u.role+' · '+(u.enabled?'активен':'отключён')+' · '+u.rooms.join(', ')),
         btn('Изменить',()=>{sub.value=u.subject;label.value=u.label;role.value=u.role;assigned.value=u.rooms.join(',');enabled.value=u.enabled?'1':'0';sub.focus();}));users.append(r);}
       devices.replaceChildren();for(const d of dl){const r=row();r.append(el('span',d.label+' · '+d.kind+' · '+(d.room_id||'общий')+' · '+d.status+(d.online?' · online':'')));
