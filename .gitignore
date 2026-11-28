@@ -13,3 +13,5 @@ local-tls/
 *.pem
 *.key
 app/static/audio/
+backups/
+*.dump
