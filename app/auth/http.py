@@ -8,7 +8,7 @@ import re
 
 from fastapi import HTTPException, Request
 from fastapi.responses import JSONResponse, RedirectResponse
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Literal
 from starlette.concurrency import run_in_threadpool
 
@@ -45,6 +45,15 @@ class DeviceConfig(BaseModel):
     label: str = Field(min_length=1,max_length=100)
     kind: Literal['board','kiosk']
     room_id: str | None = Field(default=None,max_length=16)
+
+
+class DeviceHeartbeat(BaseModel):
+    model_config=ConfigDict(extra='forbid')
+    page: Literal['board','kiosk','unknown']='unknown'
+    state: Literal['ready','stale','starting','unknown']='unknown'
+    age_seconds: int | None=Field(default=None,ge=0,le=86400,strict=True)
+    audio_ready: bool=False
+    client_version: str=Field(default='legacy',max_length=24,pattern=r'^[A-Za-z0-9_.-]+$')
 
 
 class PairRequest(BaseModel):
@@ -85,9 +94,9 @@ def policy(method,path,principal):
         return allowed({'admin'})
     if method=='GET' and path=='/api/analytics':
         return allowed({'admin','analyst'})
-    if method=='POST' and path in ('/api/check-in','/api/walk-in'):
+    if method=='POST' and path in ('/api/check-in','/api/walk-in','/api/check-in/qr'):
         return allowed(REGISTRATION)
-    if method=='POST' and path=='/api/staff/demo-appointments':
+    if method=='POST' and path in ('/api/staff/demo-appointments','/api/staff/qr'):
         return allowed({'admin','registrar'})
     if method=='POST' and path=='/api/staff/rooms':
         return allowed({'admin'})
@@ -215,9 +224,9 @@ def install_routes(app,settings,store,oidc):
         return store.revoke_device(request.state.principal,device_id)
 
     @app.post('/api/devices/heartbeat')
-    def heartbeat(request: Request):
+    def heartbeat(data: DeviceHeartbeat,request: Request):
         secure_only()
-        return store.heartbeat(request.state.principal)
+        return store.heartbeat(request.state.principal,data.model_dump())
 
     @app.get('/api/admin/audit')
     def recent_audit():

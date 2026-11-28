@@ -1,6 +1,11 @@
 'use strict';
 const app = document.getElementById('app');
 const mode = location.pathname;
+let deviceState='starting', deviceLast=0, deviceAudio=false;
+window.cfTelemetry=()=>({page:['/board','/kiosk'].includes(mode)?mode.slice(1):'unknown',state:deviceState,age_seconds:deviceLast?Math.min(86400,Math.max(0,Math.floor((performance.now()-deviceLast)/1000))):null,audio_ready:deviceAudio,client_version:'0.6.0'});
+function deviceFresh(){deviceLast=performance.now();deviceState='ready';}
+function deviceStale(){deviceState='stale';}
+if(new URLSearchParams(location.search).get('device')==='1'&&['/board','/kiosk'].includes(mode))document.body.classList.add('device-view');
 const labels = { waiting:'Ожидает', called:'Приглашён', serving:'На приёме', done:'Завершён', no_show:'Не явился', cancelled:'Отменён', booked:'Записан' };
 const node = (tag, text, cls) => { const el = document.createElement(tag); if (text !== undefined) el.textContent = text; if (cls) el.className = cls; return el; };
 const button = (text, fn, secondary = false) => { const b = node('button', text, secondary ? 'secondary' : ''); b.type = 'button'; b.addEventListener('click', fn); return b; };
@@ -43,32 +48,65 @@ function home() {
   app.append(grid);
 }
 async function kiosk() {
-  title('Добро пожаловать','Подтвердите запись или получите демонстрационный талон.');
-  const rooms = await api('/api/rooms'), grid = node('section',undefined,'grid'), msg = notice(), result = node('section',undefined,'panel');
-  result.hidden = true; let busy = false, pending = null;
+  document.body.classList.add('kiosk-page');
+  title('Добро пожаловать','Подтвердите запись кодом или QR, либо обратитесь к регистратору.');
+  const rooms = await api('/api/rooms'), grid = node('section',undefined,'grid'), msg = notice(), result = node('section',undefined,'panel kiosk-result'), connection=node('p','Связь с сервером','muted');
+  deviceFresh();
+  result.hidden = true; let busy = false, pending = null, qrPending = null, clearTimer = null, probing=false, online=true;
+  function clearResult(){clearTimeout(clearTimer);result.hidden=true;result.replaceChildren();message(msg,'');}
   async function submit(path,body) {
-    if (busy) return;
-    busy = true; grid.querySelectorAll('button').forEach(b => b.disabled = true);
+    if (busy || !online) return false;
+    busy = true; clearResult(); grid.querySelectorAll('button').forEach(b => b.disabled = true);
     try {
-      const t = await api(path,body); pending = null;
-      result.replaceChildren(node('h2','Ваш талон'),node('div',t.code,'ticket'),node('p',`Кабинет ${t.room_id} · ${labels[t.status] || t.status}`),node('p','Следите за табло.','muted'));
-      result.hidden = false; message(msg,'Талон зарегистрирован.');
-    } catch (e) { result.hidden = true; message(msg,e.message + (pending ? ' Повторите запрос для того же кабинета.' : ''),true); }
-    finally { busy = false; grid.querySelectorAll('button').forEach(b => b.disabled = false); }
+      const t = await api(path,body); pending = null; qrPending=null; deviceFresh();
+      result.replaceChildren(node('h2','Ваш талон'),node('div',t.code,'ticket'),node('p',`Кабинет ${t.room_id} · ${labels[t.status] || t.status}`),node('p','Следите за табло.','muted'),button('Готово',()=>{clearResult();input.focus();},true));
+      result.hidden = false; message(msg,'Талон зарегистрирован.');clearTimer=setTimeout(()=>{clearResult();input.focus();},45000);
+      return true;
+    } catch (e) { result.hidden = true; message(msg,e.message + (pending||qrPending ? ' Повторите тот же запрос после проверки связи.' : ''),true); return false; }
+    finally { busy = false; grid.querySelectorAll('button').forEach(b => b.disabled = !online); }
   }
-  const p = node('article',undefined,'panel'), q = node('article',undefined,'panel'), input = node('input');
-  input.placeholder = 'DEMO-101'; input.maxLength = 32; input.required = true; input.setAttribute('aria-label','Код записи');
+  const p = node('article',undefined,'panel kiosk-card'), q = node('article',undefined,'panel kiosk-card'), input = node('input');
+  input.placeholder = 'Код или QR'; input.maxLength = 64; input.required = true; input.autocomplete='off';input.spellcheck=false;input.setAttribute('autocapitalize','off');input.setAttribute('aria-label','Код записи');
   const form = node('form',undefined,'row'), check = node('button','Подтвердить'); check.type = 'submit'; form.append(input,check);
-  form.addEventListener('submit',e => { e.preventDefault(); submit('/api/check-in',{booking_code:input.value}); });
-  p.append(node('h2','Я записан'),node('p','Тестовые коды: DEMO-101, DEMO-102, DEMO-103.','muted'),form);
+  form.addEventListener('submit',async e => {
+    e.preventDefault();const value=input.value.trim();
+    if(!value||busy)return;
+    let ok;
+    if(value.startsWith('CF1:')){
+      if(!qrPending||qrPending.code!==value)qrPending={code:value,request_key:uid()};
+      ok=await submit('/api/check-in/qr',qrPending);
+    }else{
+      qrPending=null;ok=await submit('/api/check-in',{booking_code:value});
+    }
+    if(ok){input.value='';input.focus();}
+  });
+  p.append(node('div','01','step-number'),node('h2','Я записан'),node('p','Поднесите QR к USB-сканеру или введите код записи. Тестовые коды: DEMO-101, DEMO-102, DEMO-103.','muted'),form);
   const select = roomSelect(rooms), row = node('div',undefined,'row');
   row.append(select,button('Получить талон',() => {
     if (pending && pending.room_id !== select.value && !confirm('Предыдущий запрос мог создать талон. Выдать новый в другой кабинет?')) return;
     if (!pending || pending.room_id !== select.value) pending = {room_id:select.value,request_key:uid()};
     submit('/api/walk-in',pending);
   }));
-  q.append(node('h2','Без записи'),node('p','В реальной клинике маршрут определяет регистратура.','muted'),row);
-  grid.append(p,q); app.append(grid,msg,result);
+  q.append(node('div','02','step-number'),node('h2','Без записи'),node('p','В реальной клинике маршрут определяет регистратура.','muted'),row);
+  grid.append(p,q); app.append(connection,grid,msg,result);input.focus();
+  function lost(){online=false;deviceStale();connection.textContent='Нет связи. Обратитесь к регистратору.';connection.className='stale';clearResult();grid.querySelectorAll('button').forEach(b=>b.disabled=true);}
+  async function probe(){
+    if(probing)return;probing=true;
+    try{
+      const current=await api('/api/rooms');
+      if(JSON.stringify(current)!==JSON.stringify(rooms)){
+        const prior=select.value;rooms.splice(0,rooms.length,...current);
+        select.replaceChildren(...Array.from(roomSelect(rooms).options));
+        if(rooms.some(r=>r.id===prior))select.value=prior;
+      }
+      online=true;deviceFresh();connection.textContent='Связь с сервером';connection.className='muted';
+      if(!busy)grid.querySelectorAll('button').forEach(b=>b.disabled=false);
+    }catch{lost();}finally{probing=false;}
+  }
+  const timer=setInterval(probe,5000);
+  const watchdog=setInterval(()=>{if(performance.now()-deviceLast>=15000&&online)lost();},1000);
+  addEventListener('offline',lost);addEventListener('online',probe);
+  addEventListener('pagehide',()=>{clearInterval(timer);clearInterval(watchdog);clearTimeout(clearTimer);},{once:true});
 }
 async function staff() {
   title('Рабочее место врача','Приоритет наступившей записи, FIFO для остальных; долго ожидающие получают преимущество. Правила только для демо.');
@@ -130,6 +168,25 @@ async function staff() {
   code.placeholder = 'DEMO-TEST'; code.required = true; code.maxLength = 32; code.setAttribute('aria-label','Тестовый код записи'); date.type = 'datetime-local'; date.required = true; date.setAttribute('aria-label','Время приёма'); submit.type = 'submit';
   bookingForm.append(code,dest,date,submit); booking.append(bookingForm,result); if (['demo','admin','registrar'].includes(identity.role)) app.append(booking);
   bookingForm.addEventListener('submit',async e => { e.preventDefault(); submit.disabled = true; try { await api('/api/staff/demo-appointments',{booking_code:code.value,room_id:dest.value,scheduled_at:new Date(date.value).toISOString()}); message(result,'Запись создана. Подтвердите её в терминале.'); } catch(e) { message(result,e.message,true); } finally { submit.disabled = false; } });
+  if(['demo','admin','registrar'].includes(identity.role)){
+    const qr=node('details',undefined,'panel');qr.append(node('summary','Выдать QR-код записи'));
+    const qrRow=node('form',undefined,'row'),qrInput=node('input'),qrButton=node('button','Создать QR-код'),qrResult=node('div',undefined,'qr-result'),qrMsg=notice();
+    qrInput.placeholder='DEMO-101 или MIS-…';qrInput.maxLength=32;qrInput.required=true;qrInput.autocomplete='off';qrInput.setAttribute('aria-label','Код записи для QR');qrButton.type='submit';
+    qrRow.append(qrInput,qrButton);qr.append(qrRow,qrMsg,qrResult);app.append(qr);
+    let qrTimer;
+    qrRow.addEventListener('submit',async e=>{
+      e.preventDefault();qrButton.disabled=true;clearTimeout(qrTimer);qrResult.replaceChildren();
+      try{
+        const d=await api('/api/staff/qr',{booking_code:qrInput.value});
+        const img=node('img');img.src='data:image/png;base64,'+d.png_base64;img.alt='Одноразовый QR-код для подтверждения записи';img.width=280;img.height=280;
+        const raw=node('code',d.qr_text,'qr-code-text');
+        qrResult.append(img,node('p','Действует до '+new Date(d.expires_at*1000).toLocaleString('ru-RU')),node('p','Тестовый код для ручного ввода:'),raw,
+          button('Скрыть QR',()=>{qrResult.replaceChildren();message(qrMsg,'');},true));
+        qrInput.value='';message(qrMsg,'QR создан. Покажите его пациенту; не публикуйте код.');
+        qrTimer=setTimeout(()=>{qrResult.replaceChildren();message(qrMsg,'');},90000);
+      }catch(e){message(qrMsg,e.message,true);}finally{qrButton.disabled=false;}
+    });
+  }
   const config = node('details',undefined,'panel');
   config.append(node('summary','Управление кабинетами (демо)'));
   const configForm = node('form',undefined,'row'), roomCode = node('input'), roomLabel = node('input'), saveRoom = node('button','Сохранить кабинет'), configMsg = notice();
@@ -155,31 +212,56 @@ async function staff() {
   await refresh(); subscribe(refresh);
 }
 async function board() {
+  document.body.classList.add('board-page');
   title('Приглашение на приём','Следите за номером своего талона.');
-  const grid = node('section',undefined,'grid'), sync = node('p','Подключение…','muted'); grid.id='board-grid'; sync.setAttribute('role','status');
-  const filter = new URLSearchParams(location.search).get('room'); let loading = false, dirty = false, voice = false, initialized = false; const seen = new Map();
-  if ('speechSynthesis' in window && 'SpeechSynthesisUtterance' in window) {
-    const v = button('Включить озвучку',() => { voice = !voice; v.textContent = voice ? 'Выключить озвучку' : 'Включить озвучку'; if (voice) say('Озвучка включена'); else speechSynthesis.cancel(); },true); app.append(v);
+  const grid = node('section',undefined,'grid'), sync = node('p','Подключение…','muted');
+  grid.id='board-grid';sync.setAttribute('role','status');grid.setAttribute('aria-label','Вызовы пациентов');
+  const filter=new URLSearchParams(location.search).get('room');
+  let loading=false,dirty=false,initialized=false,epoch=0,stale=false,disposed=false;
+  const voiceMsg=node('span','Звук выключен','muted'),controls=node('div',undefined,'row board-controls');
+  let voiceBtn;
+  const audio=new window.ClinicAudio(error=>{
+    deviceAudio=false;voiceMsg.textContent=error;voiceBtn.textContent='Включить озвучку';
+  });
+  voiceBtn=button('Включить озвучку',async()=>{
+    voiceBtn.disabled=true;
+    try{
+      if(audio.enabled){audio.disable();deviceAudio=false;voiceBtn.textContent='Включить озвучку';voiceMsg.textContent='Звук выключен';}
+      else{await audio.enable();deviceAudio=true;voiceBtn.textContent='Выключить озвучку';voiceMsg.textContent='Локальное аудио готово';}
+    }catch{audio.disable();deviceAudio=false;voiceMsg.textContent='Локальные WAV не установлены или звук недоступен.';voiceBtn.textContent='Включить озвучку';}
+    finally{voiceBtn.disabled=false;}
+  },true);
+  controls.append(voiceBtn,voiceMsg);app.append(controls,sync,grid);
+  function invalidate(){
+    if(!stale){epoch++;stale=true;}
+    deviceStale();grid.replaceChildren();initialized=false;audio.reset();
+    sync.textContent='Нет актуальных данных. Обратитесь к сотруднику.';sync.className='stale';
   }
-  function say(text) { const u = new SpeechSynthesisUtterance(text); u.lang = 'ru-RU'; speechSynthesis.speak(u); }
-  app.append(sync,grid);
   async function refresh() {
-    if (loading) { dirty = true; return; } loading = true;
-    try {
-      let data = await api('/api/board'); if (filter) data = data.filter(r => r.room_id === filter);
+    if(disposed)return;
+    if(loading){dirty=true;return;}loading=true;const startedEpoch=epoch;
+    try{
+      let data=await api('/api/board');
+      if(disposed||startedEpoch!==epoch)return;
+      if(filter)data=data.filter(r=>r.room_id===filter);
       grid.replaceChildren();
-      for (const r of data) {
-        const p = node('article',undefined,'panel' + (r.state === 'called' ? ' active' : ''));
-        p.append(node('h2',r.label),node('div',r.code || '—','ticket'),node('p',r.state === 'called' ? 'Проходите в кабинет' : r.state === 'serving' ? 'Идёт приём' : 'Ожидайте вызова','status')); grid.append(p);
-        if (voice && initialized && r.state === 'called' && seen.get(r.room_id) !== r.call_version) say(`Талон ${r.code.replace('A-','А, ').split('').join(' ')}. ${r.label}`);
-        seen.set(r.room_id,r.call_version);
+      for(const r of data){
+        const p=node('article',undefined,'panel'+(r.state==='called'?' active':''));
+        p.append(node('h2',r.label),node('div',r.code||'—','ticket'),node('p',r.state==='called'?'Проходите в кабинет':r.state==='serving'?'Идёт приём':'Ожидайте вызова','status'));grid.append(p);
       }
-      initialized = true; if (!data.length) grid.append(node('p','Кабинет не найден.'));
-      sync.textContent = 'Обновлено ' + new Date().toLocaleTimeString('ru-RU'); sync.className = 'muted';
-    } catch (e) { grid.replaceChildren(); initialized = false; if (voice) speechSynthesis.cancel(); sync.textContent = 'Нет связи с сервером. Обратитесь к сотруднику.'; sync.className = 'stale'; }
-    finally { loading = false; if (dirty) { dirty = false; refresh(); } }
+      audio.sync(data,initialized&&!stale);
+      initialized=true;stale=false;deviceFresh();if(!data.length)grid.append(node('p','Кабинет не найден.'));
+      sync.textContent='Обновлено '+new Date().toLocaleTimeString('ru-RU');sync.className='muted';
+    }catch{if(!disposed)invalidate();}
+    finally{loading=false;if(dirty&&!disposed){dirty=false;refresh();}}
   }
-  await refresh(); subscribe(refresh);
+  const watchdog=setInterval(()=>{
+    if(deviceLast&&performance.now()-deviceLast>=15000){invalidate();refresh();}
+  },1000);
+  addEventListener('offline',()=>{invalidate();refresh();});
+  addEventListener('online',refresh);
+  addEventListener('pagehide',()=>{disposed=true;clearInterval(watchdog);audio.disable();},{once:true});
+  await refresh();subscribe(refresh);
 }
 async function analytics() {
   title('Аналитика потока','По последним 100 завершённым этапам каждого кабинета. Это не прогноз и не SLA.');
@@ -197,4 +279,4 @@ async function analytics() {
   await refresh(); subscribe(refresh);
 }
 app.replaceChildren();
-(mode === '/kiosk' ? kiosk() : mode === '/staff' ? staff() : mode === '/board' ? board() : mode === '/analytics' ? analytics() : ['/admin','/pair'].includes(mode) ? Promise.resolve() : Promise.resolve(home())).catch(e => app.replaceChildren(node('h1','Не удалось загрузить интерфейс'),node('p',e.message,'error')));
+(mode === '/kiosk' ? kiosk() : mode === '/staff' ? staff() : mode === '/board' ? board() : mode === '/analytics' ? analytics() : ['/admin','/pair'].includes(mode) ? Promise.resolve() : Promise.resolve(home())).catch(e => {deviceStale();app.replaceChildren(node('h1','Не удалось загрузить интерфейс'),node('p',e.message,'error'),button('Повторить подключение',()=>location.reload()));});
