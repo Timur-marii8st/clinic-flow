@@ -156,19 +156,23 @@ class QueueService:
     def check_in(self, code):
         with self.connection(write=True) as con:
             row = con.execute('SELECT * FROM tickets WHERE booking_code=?', (code,)).fetchone()
-            if not row:
-                raise QueueError('Тестовая запись не найдена', 404)
-            if row['status'] in ACTIVE:
-                return self._public(row)
-            if row['status'] != 'booked':
-                raise QueueError('Запись уже обработана')
-            if con.execute('SELECT 1 FROM mis_appointments WHERE ticket_id=? AND conflict IS NOT NULL',(row['id'],)).fetchone():
-                raise QueueError('Уточните запись у регистратора')
-            ts = now()
-            con.execute('UPDATE tickets SET status=?,checked_in_at=?,updated_at=? WHERE id=?', ('waiting', ts, ts, row['id']))
-            self._new_leg(con, row['id'], row['room_id'], ts)
-            self._event(con, row['id'], 'check_in', 'booked', 'waiting', ts)
-            return self._public(self._ticket(con, row['id']))
+            return self._check_in(con,row)
+
+    def _check_in(self,con,row):
+        if not row:
+            raise QueueError('Тестовая запись не найдена',404)
+        if row['status'] in ACTIVE:
+            return self._public(row)
+        if row['status'] != 'booked':
+            raise QueueError('Запись уже обработана')
+        if con.execute('SELECT 1 FROM mis_appointments WHERE ticket_id=? AND conflict IS NOT NULL',(row['id'],)).fetchone():
+            raise QueueError('Уточните запись у регистратора')
+        ts=now()
+        con.execute('UPDATE tickets SET status=?,checked_in_at=?,updated_at=? WHERE id=?',
+                    ('waiting',ts,ts,row['id']))
+        self._new_leg(con,row['id'],row['room_id'],ts)
+        self._event(con,row['id'],'check_in','booked','waiting',ts)
+        return self._public(self._ticket(con,row['id']))
 
     def staff_view(self, room):
         with self.connection() as con:

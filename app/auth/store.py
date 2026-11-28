@@ -183,12 +183,21 @@ class AuthStore:
             if row:
                 return Principal(row['id'],row['kind'],(row['room_id'],) if row['room_id'] else (), 'device')
 
-    def heartbeat(self, principal):
+    def heartbeat(self, principal, telemetry=None):
         with self.queue.connection(write=True) as con:
             row=con.execute('SELECT 1 FROM devices WHERE id=? AND revoked=0 AND token_expires>?',(principal.id,int(time.time()))).fetchone()
             if not row:
                 raise QueueError('Устройство не авторизовано',401)
-            con.execute('UPDATE devices SET last_seen=? WHERE id=?',(int(time.time()),principal.id))
+            ts=int(time.time())
+            con.execute('UPDATE devices SET last_seen=? WHERE id=?',(ts,principal.id))
+            if telemetry is not None:
+                if telemetry['page'] not in (principal.role,'unknown'):
+                    raise QueueError('Неверный тип интерфейса устройства',422)
+                con.execute('''INSERT INTO device_telemetry(device_id,page,state,age_seconds,audio_ready,client_version,observed_at)
+                    VALUES (?,?,?,?,?,?,?) ON CONFLICT(device_id) DO UPDATE SET page=excluded.page,state=excluded.state,
+                    age_seconds=excluded.age_seconds,audio_ready=excluded.audio_ready,client_version=excluded.client_version,
+                    observed_at=excluded.observed_at''',(principal.id,telemetry['page'],telemetry['state'],
+                    telemetry['age_seconds'],int(telemetry['audio_ready']),telemetry['client_version'],ts))
         return {'status':'ok'}
 
     def revoke_device(self, principal, device_id):
@@ -203,10 +212,15 @@ class AuthStore:
     def devices(self):
         with self.queue.connection() as con:
             result=[]
-            for row in con.execute('SELECT id,label,kind,room_id,last_seen,revoked,token_expires,pairing_expires FROM devices ORDER BY label,id'):
+            for row in con.execute('''SELECT d.id,d.label,d.kind,d.room_id,d.last_seen,d.revoked,d.token_expires,d.pairing_expires,
+                t.page,t.state AS display_state,t.age_seconds,t.audio_ready,t.client_version,t.observed_at
+                FROM devices d LEFT JOIN device_telemetry t ON t.device_id=d.id ORDER BY d.label,d.id'''):
                 r=dict(row)
                 r['status']='revoked' if r['revoked'] else 'paired' if (r['token_expires'] or 0)>int(time.time()) else 'pending' if (r['pairing_expires'] or 0)>int(time.time()) else 'expired'
                 r['online']=r['status']=='paired' and (r['last_seen'] or 0)>int(time.time())-75
+                r['audio_ready']=bool(r['audio_ready']) if r['audio_ready'] is not None else None
+                if not r['online'] or not r['observed_at'] or r['observed_at']<=int(time.time())-75:
+                    r['display_state']='unknown'
                 result.append(r)
             return result
 

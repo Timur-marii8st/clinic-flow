@@ -1,11 +1,13 @@
 FROM python:3.13-slim
 WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends espeak-ng && rm -rf /var/lib/apt/lists/*
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt && useradd --system --uid 10001 clinic && mkdir -p /app/data /app/mock && chown clinic /app/data /app/mock
 COPY app ./app
 COPY alembic.ini .
 COPY migrations ./migrations
 COPY scripts ./scripts
+RUN python -m scripts.build_audio
 USER clinic
 ENV CLINIC_DB_PATH=/app/data/clinic.sqlite3 PYTHONDONTWRITEBYTECODE=1 PYTHONUNBUFFERED=1
 EXPOSE 8000

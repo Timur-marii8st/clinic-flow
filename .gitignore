@@ -12,3 +12,4 @@ data/
 local-tls/
 *.pem
 *.key
+app/static/audio/

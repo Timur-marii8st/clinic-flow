@@ -143,6 +143,7 @@ def test_room_roles_and_audit(secure):
     assert c.get('/api/staff/102/no-shows').status_code==403
     assert c.get('/api/admin/users').status_code==403
     assert c.get('/api/integration/status').status_code==403
+    assert post(c,'/api/staff/qr',{'booking_code':'DEMO-101'}).status_code==403
     assert c.post('/api/integration/retry',json={},headers=ORIGIN).status_code==403
     assert c.get('/api/analytics').status_code==403
     assert c.get('/api/staff/tickets/'+str(second['id'])+'/history').status_code==403
@@ -183,6 +184,8 @@ def test_device_pairing_scope_heartbeat_revoke(secure):
     c,p=secure
     assert login(c,p,'admin-sub').status_code==303
     admin=c.cookies[SESSION]
+    qr=post(c,'/api/staff/qr',{'booking_code':'DEMO-101'}).json()['qr_text']
+    qr_body={'code':qr,'request_key':'secure-qr-request-001'}
     board=post(c,'/api/admin/devices',{'label':'Board 101','kind':'board','room_id':'101'}).json()
     kiosk=post(c,'/api/admin/devices',{'label':'Kiosk','kind':'kiosk'}).json()
     assert 'pairing_code' not in c.get('/api/admin/devices').text
@@ -195,14 +198,24 @@ def test_device_pairing_scope_heartbeat_revoke(secure):
     assert c.get('/api/staff/101').status_code==403
     assert post(c,'/api/walk-in',{'room_id':'101'}).status_code==403
     assert post(c,'/api/devices/heartbeat',{}).status_code==200
+    telemetry={'page':'board','state':'ready','age_seconds':3,'audio_ready':True,'client_version':'0.6.0'}
+    assert post(c,'/api/devices/heartbeat',telemetry).status_code==200
+    assert post(c,'/api/devices/heartbeat',{**telemetry,'page':'kiosk'}).status_code==422
+    assert post(c,'/api/devices/heartbeat',{**telemetry,'patient':'forbidden'}).status_code==422
+    assert post(c,'/api/check-in/qr',qr_body).status_code==403
+    assert post(c,'/api/staff/qr',{'booking_code':'DEMO-101'}).status_code==403
     c.cookies.clear()
     assert post(c,'/auth/pair',{'pairing_code':board['pairing_code']}).status_code==403
     assert post(c,'/auth/pair',{'pairing_code':kiosk['pairing_code']}).json()['path']=='/kiosk'
     assert c.get('/api/board').status_code==403
+    assert post(c,'/api/check-in/qr',qr_body).status_code==200
+    assert post(c,'/api/check-in/qr',qr_body).status_code==200
     assert post(c,'/api/walk-in',{'room_id':'102'}).status_code==201
     assert post(c,'/api/staff/102/call-next',{}).status_code==403
     c.cookies.clear()
     c.cookies.set(SESSION,admin,domain='clinic.example',path='/')
+    info=next(x for x in c.get('/api/admin/devices').json() if x['id']==board['id'])
+    assert info['display_state']=='ready' and info['audio_ready'] and info['age_seconds']==3 and info['client_version']=='0.6.0'
     assert post(c,'/api/admin/devices/'+board['id']+'/revoke',{}).status_code==200
     devices=c.get('/api/admin/devices').json()
     assert next(x for x in devices if x['id']==board['id'])['status']=='revoked'

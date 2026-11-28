@@ -99,7 +99,7 @@
       showIntegration(ist,ic);
       users.replaceChildren();for(const u of ul){const r=row();r.append(el('span',u.label+' · '+u.role+' · '+(u.enabled?'активен':'отключён')+' · '+u.rooms.join(', ')),
         btn('Изменить',()=>{sub.value=u.subject;label.value=u.label;role.value=u.role;assigned.value=u.rooms.join(',');enabled.value=u.enabled?'1':'0';sub.focus();}));users.append(r);}
-      devices.replaceChildren();for(const d of dl){const r=row();r.append(el('span',d.label+' · '+d.kind+' · '+(d.room_id||'общий')+' · '+d.status+(d.online?' · online':'')));
+      devices.replaceChildren();for(const d of dl){const r=row();r.append(el('span',d.label+' · '+d.kind+' · '+(d.room_id||'общий')+' · '+d.status+(d.online?' · online':' · offline')+' · '+(d.display_state||'unknown')+' · '+(d.age_seconds===null||d.age_seconds===undefined?'—':d.age_seconds+' c')+' · v'+(d.client_version||'—')+(d.kind==='board'?(d.audio_ready?' · звук готов':' · звук не подтверждён'):'')));
         if(!d.revoked)r.append(btn('Отозвать',async()=>{if(!confirm('Отозвать доступ устройства?'))return;try{await call('/api/admin/devices/'+d.id+'/revoke',{});await refresh();}catch(e){alert(msg,e.message,true);}}));
         devices.append(r);}
       auditList.replaceChildren();for(const a of al){const r=el('p',new Date(a.created_at).toLocaleString('ru-RU')+' · '+a.actor+' · '+a.action+' · '+a.object_type+': '+a.object_id);auditList.append(r);}
@@ -118,7 +118,8 @@
     }else if(!identity){nav.append(link('/auth/login?next=/staff','Вход сотрудника'));}
     if(path==='/admin')await admin();
     if(identity?.kind==='device'){
-      const beat=async()=>{try{await call('/api/devices/heartbeat',{});}catch{/* board refresh detects expired access */}};
+      if(['/board','/kiosk'].includes(path))document.body.classList.add('device-view');
+      const beat=async()=>{try{await call('/api/devices/heartbeat',window.cfTelemetry?window.cfTelemetry():{});}catch{/* display watchdog detects stale state */}};
       await beat();
       const timer=setInterval(beat,30000);
       addEventListener('pagehide',()=>clearInterval(timer),{once:true});
