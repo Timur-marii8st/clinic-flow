@@ -22,6 +22,7 @@ from .integrations.http import install_integration_routes
 from .devices.http import install_device_routes
 from .routing.http import install_routing_routes
 from .monitoring import Metrics
+from .board_cache import BoardSnapshots
 from .auth.store import AuthStore, acting_as
 from .auth.http import install_routes, resolve, policy, require_room, STAFF, QUEUE, BOARD, REGISTRATION
 
@@ -87,6 +88,7 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
     password = os.environ.get('CLINIC_STAFF_PASSWORD', '') if staff_password is None else staff_password
     basic = HTTPBasic(auto_error=False)
     changes = Changes()
+    board_snapshots = BoardSnapshots(queue,changes)
     settings = security_settings if security_settings is not None else SecuritySettings.from_env()
     if settings and not url and db_path is None:
         raise RuntimeError('Secure profile requires PostgreSQL; SQLite is available only for explicit test instances')
@@ -261,8 +263,8 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         return await mutate(request,queue.transfer, room_id, ticket_id, data.target_room, data.expected_version, request_key)
 
     @app.get('/api/board')
-    def board(request: Request):
-        rows = queue.board()
+    async def board(request: Request):
+        rows = await board_snapshots.read()
         return [r for r in rows if request.state.principal.permits_room(r['room_id'])] if settings else rows
 
     @app.get('/api/events', include_in_schema=False)
@@ -272,6 +274,10 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
             yield 'event: refresh\ndata: {}\n\n'
             while not await request.is_disconnected():
                 new_version = await changes.wait(version)
+                if new_version != version:
+                    # Coalesce bursts of commits; subscribers fetch the latest snapshot.
+                    await asyncio.sleep(.075)
+                    new_version = changes.generation
                 if settings and await resolve(request,auth) != request.state.principal:
                     return
                 if new_version != version:
