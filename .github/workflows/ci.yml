@@ -32,7 +32,7 @@ jobs:
             requirements-dev.txt
       - run: python -m pip install -r requirements-dev.txt
       - run: python -m pytest -q -rs
-      - run: node --check app/static/app.js
+      - run: node --check app/static/app.js && node --check app/static/security.js
       - run: python scripts/smoke_sse.py
   browser:
     runs-on: ubuntu-latest

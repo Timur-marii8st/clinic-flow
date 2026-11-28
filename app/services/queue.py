@@ -6,6 +6,8 @@ Domain sorting and transition policy live in app.domain.queue_policy.
 import json
 import re
 from statistics import median
+import hashlib
+from app.auth.store import actor_id, audit
 
 from app.domain.queue_policy import (
     ACTIVE, DEMO_BOOKINGS, ROOMS, TRANSITIONS, QueueError,
@@ -40,6 +42,12 @@ class QueueService:
 
     def _command(self, name, key, payload, execute):
         """Store successful command result in the very same write transaction."""
+        actor = actor_id()
+        # Keep legacy demo/system keys; secure users and devices are separate namespaces.
+        if key is not None and actor not in ('system','demo'):
+            if not 16 <= len(key) <= 100:
+                raise QueueError('Некорректный ключ идемпотентности',422)
+            key = hashlib.sha256((actor+'\u0000'+key).encode()).hexdigest()
         fingerprint = json.dumps([name, payload], ensure_ascii=False, sort_keys=True, separators=(',', ':'))
         if key is not None and not 16 <= len(key) <= 100:
             raise QueueError('Некорректный ключ идемпотентности', 422)
@@ -64,12 +72,15 @@ class QueueService:
         with self.connection(write=True) as con:
             con.execute('''INSERT INTO rooms(id,label) VALUES (?,?)
                 ON CONFLICT(id) DO UPDATE SET label=excluded.label''', (room, label))
+            audit(con,'room_upsert','room',room)
             return {'id': room, 'label': label}
 
     @staticmethod
     def _event(con, ticket_id, action, old_status, new_status, ts):
         con.execute('INSERT INTO events(ticket_id,action,old_status,new_status,created_at) VALUES (?,?,?,?,?)',
                     (ticket_id, action, old_status, new_status, ts))
+        row = con.execute('SELECT room_id FROM tickets WHERE id=?',(ticket_id,)).fetchone()
+        audit(con, action, 'ticket', ticket_id, {'from':old_status,'to':new_status,'room':row['room_id']})
 
     @staticmethod
     def _public(row):
@@ -102,6 +113,8 @@ class QueueService:
             return [dict(row) for row in con.execute('SELECT id,label FROM rooms ORDER BY id')]
 
     def walk_in(self, room, request_key=None):
+        if request_key and actor_id() not in ('system','demo'):
+            request_key=hashlib.sha256((actor_id()+'\x00'+request_key).encode()).hexdigest()
         with self.connection(write=True) as con:
             self._room(con, room)
             if request_key:
