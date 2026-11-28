@@ -2,7 +2,7 @@
 const app = document.getElementById('app');
 const mode = location.pathname;
 let deviceState='starting', deviceLast=0, deviceAudio=false;
-window.cfTelemetry=()=>({page:['/board','/kiosk'].includes(mode)?mode.slice(1):'unknown',state:deviceState,age_seconds:deviceLast?Math.min(86400,Math.max(0,Math.floor((performance.now()-deviceLast)/1000))):null,audio_ready:deviceAudio,client_version:'0.6.0'});
+window.cfTelemetry=()=>({page:['/board','/kiosk'].includes(mode)?mode.slice(1):'unknown',state:deviceState,age_seconds:deviceLast?Math.min(86400,Math.max(0,Math.floor((performance.now()-deviceLast)/1000))):null,audio_ready:deviceAudio,client_version:'0.7.0'});
 function deviceFresh(){deviceLast=performance.now();deviceState='ready';}
 function deviceStale(){deviceState='stale';}
 if(new URLSearchParams(location.search).get('device')==='1'&&['/board','/kiosk'].includes(mode))document.body.classList.add('device-view');
@@ -116,7 +116,8 @@ async function staff() {
   const rooms = await api('/api/rooms'), select = roomSelect(rooms), panel = node('section',undefined,'panel'), bar = node('div',undefined,'row'), msg = notice(), rows = node('div'), absent = node('div'), sync = node('p','Подключение…','muted');
   let busy = false, seq = 0, connected = false;
   const call = button('Вызвать следующего',() => mutate(`/api/staff/${select.value}/call-next`,{})); call.disabled = true;
-  bar.append(select,call,link('/analytics','Аналитика')); panel.append(bar,sync,rows,absent,msg); app.append(panel);
+  const routePanel=node('section',undefined,'panel');routePanel.hidden=true;
+  bar.append(select,call,link('/analytics','Аналитика')); panel.append(bar,sync,rows,absent,msg); app.append(panel,routePanel);
   async function refresh() {
     if (busy) return;
     const s = ++seq, room = select.value;
@@ -130,7 +131,8 @@ async function staff() {
         const r = node('div',undefined,'list-row'), desc = node('div'), actions = node('div',undefined,'row');
         const details = [t.source === 'appointment' ? 'По записи' : 'Без записи', t.scheduled_at ? `Запись ${clock(t.scheduled_at)}` : '', `Прибыл ${clock(t.checked_in_at)}`, t.status === 'waiting' && !t.eligible ? 'Время ещё не наступило' : ''].filter(Boolean).join(' · ');
         desc.append(node('strong',`${t.code} · ${labels[t.status]}`),node('div',details,'muted'));
-        const choices = t.status === 'called' ? [['Начать','start'],['Повторить','repeat'],['Вернуть в очередь','requeue'],['Не явился','no_show']] : t.status === 'serving' ? [['Завершить','finish']] : [['Отменить','cancel']];
+        if(t.route)desc.append(node('p',t.route.label+' · '+t.route.active_label+' · '+(t.route.completed_count+1)+'/'+t.route.total_steps,'muted'));
+        const choices = t.status === 'called' ? [['Начать','start'],['Повторить','repeat'],['Вернуть в очередь','requeue'],['Не явился','no_show']] : t.status === 'serving' ? (t.route?[]:[['Завершить','finish']]) : [['Отменить','cancel']];
         const url = `/api/staff/${room}/tickets/${t.id}`;
         for (const [label,action] of choices) actions.append(button(label,() => {
           if (['no_show','cancel','requeue'].includes(action) && !confirm('Подтвердить действие?')) return;
@@ -138,7 +140,11 @@ async function staff() {
         },!['start','finish'].includes(action)));
         const target = roomSelect(rooms.filter(v => v.id !== room)); target.setAttribute('aria-label','Куда перенести');
         const move = button('Перенести',() => { if (confirm(`Перенести ${t.code} в кабинет ${target.value}?`)) mutate(`${url}/transfer`,{target_room:target.value,expected_version:t.version}); },true);
-        actions.append(target,move); r.append(desc,actions); rows.append(r);
+        if(!t.route){
+          actions.append(target,move);
+          if(t.status==='waiting'&&['demo','admin','registrar'].includes(identity.role))actions.append(button('Назначить маршрут',()=>openAttach(t,room),true));
+        }else if(t.status==='serving')actions.append(button('Следующий этап',()=>openRoute(t,room)));
+        r.append(desc,actions); rows.append(r);
       }
       if (missed.length) {
         absent.append(node('h2','Недавние неявки'));
@@ -149,8 +155,51 @@ async function staff() {
       }
     } catch (e) { if (s !== seq) return; connected = false; sync.textContent = 'Нет связи: данные скрыты, действия недоступны.'; sync.className = 'stale'; rows.replaceChildren(); absent.replaceChildren(); call.disabled = true; }
   }
+  function routeDialog(titleText){
+    routePanel.replaceChildren(node('h2',titleText),button('Закрыть',()=>{routePanel.hidden=true;routePanel.replaceChildren();},true));
+    routePanel.hidden=false;
+    const content=node('div');routePanel.append(content);return content;
+  }
+  async function openAttach(t,room){
+    const content=routeDialog('Назначить маршрут: '+t.code);
+    try{
+      const templates=await api('/api/routes/templates'),available=[];
+      for(const template of templates)for(const step of template.plan.steps)if(!step.requires.length&&step.rooms.includes(room))available.push({template,step});
+      if(!available.length){content.append(node('p','Нет подходящих шаблонов. Создайте согласованный демонстрационный шаблон.'));return;}
+      const choice=node('select');choice.setAttribute('aria-label','Шаблон и первый этап');
+      available.forEach((v,i)=>{const o=node('option',v.template.label+' v'+v.template.version+' · '+v.step.label);o.value=String(i);choice.append(o);});
+      content.append(choice,button('Подтвердить маршрут',async()=>{
+        const v=available[Number(choice.value)];
+        if(!v||select.value!==room||!confirm('Назначить указанный маршрут?'))return;
+        if(await mutate('/api/staff/'+room+'/tickets/'+t.id+'/route/attach',{template_id:v.template.id,template_version:v.template.version,step_id:v.step.id,expected_version:t.version}))routePanel.hidden=true;
+      }));
+    }catch(e){content.append(node('p',e.message,'error'));}
+  }
+  async function openRoute(t,room){
+    const content=routeDialog('Завершение этапа: '+t.code);
+    try{
+      const url='/api/staff/'+room+'/tickets/'+t.id, data=await api(url+'/route');
+      content.append(node('p','Текущий этап: '+data.route.active_label+'. Подтвердите фактическое завершение.'));
+      if(data.final){
+        content.append(button('Завершить маршрут',async()=>{if(select.value===room&&confirm('Все назначенные этапы выполнены?')&&await mutate(url+'/action',{action:'finish',expected_version:data.version}))routePanel.hidden=true;}));return;
+      }
+      if(!data.choices.length){content.append(node('p','Нет разрешённого кабинета в ваших правах. Обратитесь к регистратору.'));return;}
+      const choice=node('select');choice.setAttribute('aria-label','Следующий кабинет');
+      for(const [i,c] of data.choices.entries()){
+        const o=node('option',(c.recommended?'Рекомендация · ':'')+c.step_label+' → '+c.room_id+' · '+(c.eta_seconds===null?'Нагрузка '+c.workload:'Оценка '+minutes(c.eta_seconds)));
+        o.value=String(i);choice.append(o);
+      }
+      content.append(node('p','Подсказка по очереди, не медицинский приоритет. Не учитывает будущие записи и перерывы.','muted'),choice,
+        button('Завершить и направить',async()=>{
+          const c=data.choices[Number(choice.value)];
+          if(!c||select.value!==room||!confirm('Текущий этап действительно выполнен?'))return;
+          if(await mutate(url+'/route/advance',{step_id:c.step_id,target_room:c.room_id,expected_version:data.version}))routePanel.hidden=true;
+        }));
+    }catch(e){content.append(node('p',e.message,'error'));}
+  }
   async function mutate(path,body) {
-    if (busy || !connected) return;
+    if (busy || !connected) return false;
+    let succeeded=false;
     busy = true; ++seq; call.disabled = true; panel.querySelectorAll('button').forEach(b => b.disabled = true); select.disabled = true;
     const key = uid();
     try {
@@ -160,11 +209,12 @@ async function staff() {
         if (!(e instanceof TypeError || e.name === 'TimeoutError' || e.name === 'AbortError')) throw e;
         await api(path,body,key);
       }
-      message(msg,'Действие выполнено');
+      message(msg,'Действие выполнено');succeeded=true;
     } catch(e) { message(msg,e.message + ' Проверьте актуальную очередь перед повтором.',true); }
     finally { busy = false; select.disabled = false; await refresh(); }
+    return succeeded;
   }
-  select.addEventListener('change',() => { connected = false; rows.replaceChildren(); absent.replaceChildren(); call.disabled = true; refresh(); });
+  select.addEventListener('change',() => { routePanel.hidden=true; connected = false; rows.replaceChildren(); absent.replaceChildren(); call.disabled = true; refresh(); });
   const booking = node('details',undefined,'panel'); booking.append(node('summary','Создать синтетическую запись на время'));
   const bookingForm = node('form',undefined,'row'), code = node('input'), date = node('input'), dest = roomSelect(rooms), submit = node('button','Создать запись'), result = notice();
   code.placeholder = 'DEMO-TEST'; code.required = true; code.maxLength = 32; code.setAttribute('aria-label','Тестовый код записи'); date.type = 'datetime-local'; date.required = true; date.setAttribute('aria-label','Время приёма'); submit.type = 'submit';
@@ -188,6 +238,20 @@ async function staff() {
         qrTimer=setTimeout(()=>{qrResult.replaceChildren();message(qrMsg,'');},90000);
       }catch(e){message(qrMsg,e.message,true);}finally{qrButton.disabled=false;}
     });
+  }
+  if(['demo','admin'].includes(identity.role)){
+    const editor=node('details',undefined,'panel');editor.append(node('summary','Шаблоны маршрутов'));
+    const form=node('form',undefined,'route-editor'), templateId=node('input'),label=node('input'),ver=node('input'),plan=node('textarea'),save=node('button','Сохранить версию шаблона'),messageBox=notice();
+    templateId.value='demo-route';templateId.required=true;templateId.setAttribute('aria-label','ID шаблона');
+    label.value='Демонстрационный маршрут';label.required=true;label.setAttribute('aria-label','Название шаблона');
+    ver.type='number';ver.min='0';ver.step='1';ver.value='0';ver.required=true;ver.setAttribute('aria-label','Текущая версия (0 для нового)');
+    plan.rows=10;plan.required=true;plan.setAttribute('aria-label','JSON маршрута');
+    plan.value=JSON.stringify({steps:[{id:'start',label:'Вход',rooms:['101']},{id:'a',label:'Процедура A',rooms:['102','103'],requires:['start']},{id:'b',label:'Процедура B',rooms:['103'],requires:['start']},{id:'end',label:'Итог',rooms:['101'],requires:['a','b']}]},null,2);
+    save.type='submit';form.append(node('p','ID, название и ожидаемая текущая версия'),templateId,label,ver,plan,save);editor.append(form,messageBox);app.append(editor);
+    form.addEventListener('submit',async e=>{e.preventDefault();save.disabled=true;try{
+      const d=await api('/api/routes/templates',{id:templateId.value,label:label.value,expected_version:Number(ver.value),plan:JSON.parse(plan.value)});
+      ver.value=String(d.version);message(messageBox,'Шаблон сохранён, версия '+d.version);
+    }catch(e){message(messageBox,e.message,true);}finally{save.disabled=false;}});
   }
   const config = node('details',undefined,'panel');
   config.append(node('summary','Управление кабинетами (демо)'));
@@ -268,14 +332,16 @@ async function board() {
   if(new URLSearchParams(location.search).get('audio')==='1')toggleAudio();
 }
 async function analytics() {
-  title('Аналитика потока','По последним 100 завершённым этапам каждого кабинета. Это не прогноз и не SLA.');
+  title('Аналитика потока','Наблюдаемая статистика за последние 24 часа. Оценки нагрузки не являются обещанием времени приёма.');
   const grid = node('section',undefined,'grid'), msg = notice(); app.append(grid,msg); let busy = false;
   async function refresh() {
     if (busy) return; busy = true;
     try {
-      const data = await api('/api/analytics'); grid.replaceChildren();
+      const [data,report] = await Promise.all([api('/api/analytics'),api('/api/pilot/analytics?hours=24')]); grid.replaceChildren();
+      const routeCard=node('article',undefined,'panel');routeCard.append(node('h2','Маршруты · 24 ч'),node('p','Завершено: '+report.routes.completed_sample+' · Активно: '+report.routes.active),node('p','p50 от назначения: '+minutes(report.routes.from_attachment_p50_seconds)),node('p','p90 от назначения: '+minutes(report.routes.from_attachment_p90_seconds)));grid.append(routeCard);
       for (const r of data) {
-        const p = node('article',undefined,'panel'); p.append(node('h2',r.label),node('div',String(r.waiting),'ticket'),node('p','В очереди','muted'),node('p',`Завершено: ${r.completed} · Неявки: ${r.no_shows} · Переводы: ${r.transfers}`),node('p',`Медиана ожидания: ${minutes(r.median_wait_seconds)} (n=${r.wait_samples})`),node('p',`Медиана приёма: ${minutes(r.median_service_seconds)} (n=${r.service_samples})`)); grid.append(p);
+        const windowRoom=report.rooms.find(x=>x.room_id===r.room_id);
+        const p = node('article',undefined,'panel'); p.append(node('h2',r.label),node('div',String(r.waiting),'ticket'),node('p','В очереди','muted'),node('p',`Завершено: ${r.completed} · Неявки: ${r.no_shows} · Переводы: ${r.transfers}`),node('p',`Медиана ожидания: ${minutes(r.median_wait_seconds)} (n=${r.wait_samples})`),node('p',`Медиана приёма: ${minutes(r.median_service_seconds)} (n=${r.service_samples})`)); if(windowRoom){p.append(node('p','Ожидание p90 (24 ч): '+minutes(windowRoom.wait_p90_seconds)),node('p','Наблюдаемое время приёма: '+minutes(windowRoom.observed_service_seconds)),node('p','Оценка для нового пациента: '+minutes(windowRoom.current_estimate.eta_seconds)+' (n='+windowRoom.current_estimate.samples+')'));if(windowRoom.truncated)p.append(node('p','Выборка ограничена','muted'));} grid.append(p);
       }
       message(msg,'Обновлено ' + new Date().toLocaleTimeString('ru-RU'));
     } catch(e) { grid.replaceChildren(); message(msg,e.message,true); } finally { busy = false; }

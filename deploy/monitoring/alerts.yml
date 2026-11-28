@@ -1,0 +1,24 @@
+groups:
+  - name: clinic-flow-demo
+    rules:
+      - alert: ClinicFlowUnavailable
+        expr: up{job="clinic-flow"} == 0 or clinic_db_up == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Clinic Flow or its database is unavailable"
+      - alert: MISDeadLetters
+        expr: clinic_mis_outbox{state="dead"} > 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "MIS integration needs operator review"
+      - alert: MISConflicts
+        expr: clinic_mis_conflicts > 0
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Unresolved MIS appointment conflicts"

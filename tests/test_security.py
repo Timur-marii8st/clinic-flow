@@ -233,3 +233,33 @@ def test_secure_config_rejects_http_and_missing_credentials(monkeypatch):
         SecuritySettings.from_env()
     with pytest.raises(ValueError):
         SecuritySettings('http://clinic.example',SETTINGS.issuer,'client','secret','sub')
+
+def test_route_permissions(secure):
+    c,p=secure
+    assert login(c,p,'admin-sub').status_code==303
+    admin=c.cookies[SESSION]
+    save_user(c,'route-doctor','doctor',['101'])
+    body={'id':'test','label':'Test','expected_version':0,'plan':{'steps':[
+        {'id':'start','label':'Start','rooms':['101']},
+        {'id':'end','label':'End','rooms':['102'],'requires':['start']}]}}
+    assert post(c,'/api/routes/templates',body).status_code==201
+    t=post(c,'/api/walk-in',{'room_id':'101'}).json()
+    tid=t['id'];url=f'/api/staff/101/tickets/{tid}/route'
+    ver=c.get('/api/staff/101').json()[0]['version']
+    assert post(c,url+'/attach',{'template_id':'test','template_version':1,'step_id':'start','expected_version':ver}).status_code==200
+    assert c.get('/metrics').status_code==404
+    c.cookies.clear()
+    assert login(c,p,'route-doctor').status_code==303
+    assert c.get('/api/routes/templates').status_code==403
+    assert post(c,'/api/routes/templates',body).status_code==403
+    assert c.get('/api/pilot/analytics').status_code==403
+    post(c,'/api/staff/101/call-next',{})
+    post(c,f'/api/staff/101/tickets/{tid}/action',{'action':'start'})
+    opts=c.get(url).json()
+    assert opts['choices']==[] and not opts['final']
+    assert post(c,url+'/advance',{'step_id':'end','target_room':'102','expected_version':opts['version']}).status_code==403
+    assert post(c,f'/api/staff/101/tickets/{tid}/action',{'action':'finish'}).status_code==409
+    c.cookies.clear()
+    c.cookies.set(SESSION,admin,domain='clinic.example',path='/')
+    assert c.get(url).json()['choices'][0]['room_id']=='102'
+    assert post(c,url+'/advance',{'step_id':'end','target_room':'102','expected_version':opts['version']}).status_code==200

@@ -43,6 +43,8 @@ class Routing:
                 raise QueueError('Маршрут можно назначить только ожидающему талону без маршрута',409)
             template=con.execute('SELECT * FROM route_templates WHERE id=? AND version=?',(template_id,version)).fetchone()
             if not template:raise QueueError('Шаблон не найден',404)
+            if con.execute('SELECT MAX(version) AS v FROM route_templates WHERE id=?',(template_id,)).fetchone()['v']!=version:
+                raise QueueError('Для нового визита выберите актуальную версию шаблона',409)
             plan=Plan.model_validate_json(template['plan'])
             step=next((s for s in plan.ready([]) if s.id==step_id and room in s.rooms),None)
             if not step:raise QueueError('Первый этап не разрешён для этого кабинета',409)

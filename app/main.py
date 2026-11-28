@@ -21,6 +21,7 @@ from .auth.oidc import SecuritySettings, OIDCClient
 from .integrations.http import install_integration_routes
 from .devices.http import install_device_routes
 from .routing.http import install_routing_routes
+from .monitoring import Metrics
 from .auth.store import AuthStore, acting_as
 from .auth.http import install_routes, resolve, policy, require_room, STAFF, QUEUE, BOARD, REGISTRATION
 
@@ -106,6 +107,8 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
                   openapi_url=None if settings else '/openapi.json',
                   description='Только синтетические данные. Secure-профиль требует OIDC, HTTPS и зарегистрированные устройства.')
     app.mount('/static', StaticFiles(directory=STATIC), name='static')
+    metrics=Metrics(queue,secure=bool(settings))
+    metrics.install(app)
 
     def staff_only(credentials: HTTPBasicCredentials | None = Depends(basic)):
         if settings or not password:
@@ -136,7 +139,7 @@ def create_app(db_path: str | Path | None = None, staff_password: str | None = N
         origin = request.headers.get('origin')
         expected_origin = settings.public_origin if settings else f'{request.url.scheme}://{request.url.netloc}'
         request.state.principal = None
-        if settings and request.url.path != '/health' and request.headers.get('host','').lower() != urlsplit(settings.public_origin).netloc.lower():
+        if settings and request.url.path not in ('/health','/metrics') and request.headers.get('host','').lower() != urlsplit(settings.public_origin).netloc.lower():
             response = JSONResponse({'detail':'Некорректный Host'},status_code=400)
         elif request.method == 'POST' and (request.headers.get('sec-fetch-site') == 'cross-site' or
                 (origin != expected_origin if settings else bool(origin and origin != expected_origin)) or
